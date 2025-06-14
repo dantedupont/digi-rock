@@ -11,6 +11,37 @@
   </head>
   <body>
     <div id="app"></div>
+    <canvas id="weather-overlay" style="position:absolute;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:5;"></canvas>
+    <button id="toggle-dev-bar" style="position:fixed;top:10px;right:10px;z-index:20;background:#ffe066;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-weight:bold;">Hide Dev Bar</button>
+    <div id="weather-controls" style="position:fixed;top:50px;right:10px;z-index:10;background:rgba(255,255,255,0.8);padding:10px;border-radius:8px;box-shadow:0 2px 8px #0002;">
+      <strong>Weather Test:</strong><br>
+      <button onclick="window.setWeather('clear')">Clear</button>
+      <button onclick="window.setWeather('clouds')">Cloudy</button>
+      <button onclick="window.setWeather('rain')">Rain</button>
+      <button onclick="window.setWeather('snow')">Snow</button>
+      <button onclick="window.setWeather('thunderstorm')">Thunderstorm</button>
+      <button onclick="window.setWeather('fog')">Fog</button>
+      <hr>
+      <strong>Time Simulation:</strong><br>
+      <span id="sim-years">Years: 0</span><br>
+      <button onclick="window.setTimeSpeed(1)">1 yr/sec</button>
+      <button onclick="window.setTimeSpeed(1000)">1k yrs/sec</button>
+      <button onclick="window.setTimeSpeed(1000000)">1M yrs/sec</button>
+      <button onclick="window.setTimeSpeed(10000000)">10M yrs/sec</button>
+      <br>
+      <button onclick="window.resetRock()">Reset Rock</button>
+    </div>
     <script type="module" src="/main.js"></script>
+    <script>
+      const devBar = document.getElementById('weather-controls');
+      const toggleBtn = document.getElementById('toggle-dev-bar');
+      let devBarVisible = true;
+      toggleBtn.onclick = () => {
+        devBarVisible = !devBarVisible;
+        devBar.style.display = devBarVisible ? '' : 'none';
+        toggleBtn.textContent = devBarVisible ? 'Hide Dev Bar' : 'Show Dev Bar';
+      };
+      window.setTimeSpeed = (v) => { window._yearsPerSecond = v; };
+    </script>
   </body>
 </html> 
