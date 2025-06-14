@@ -3,6 +3,25 @@ import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
 
 // Scene setup
 const scene = new THREE.Scene();
+let rainParticles = null; // For 3D rain effect
+let snowParticles = null; // For 3D snow effect
+let snowCap = null; // For the snow cap mesh on the rock
+let thunderTimeout = null; // Stores the timeout ID for thunder
+let fogEnabled = false; // Tracks if 3D scene fog is active
+
+// State for 2D overlay canvas effects
+let thunderFlash = false; // Flag for 2D full-screen lightning flash
+let overlaySnowflakes = []; // For 2D animated snowflakes
+let overlayState = {
+  rainStreaks: [],
+  rainSplashes: [],
+  snowAccum: false, // Or an object if it stores more complex state
+  fogParticles: [], // For particle-based 2D fogs
+  lightning: false,
+  clouds: [],
+  moonPosition: null // { x, y, r } for drawing the moon
+};
+let rock; // Declare the main rock object
 
 // Camera setup
 const camera = new THREE.PerspectiveCamera(
@@ -11,7 +30,7 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   1000
 );
-camera.position.z = 5;
+camera.position.z = 10;
 
 // Renderer setup
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -23,6 +42,18 @@ const canvas = renderer.domElement;
 // The CSS gradient will be visible behind the 3D scene
 document.getElementById('app').appendChild(renderer.domElement);
 
+// Overlay canvas for 2D weather effects
+const overlay = document.getElementById('weather-overlay');
+let overlayCtx;
+if (overlay) {
+  overlayCtx = overlay.getContext('2d');
+  overlay.width = window.innerWidth;
+  overlay.height = window.innerHeight;
+  console.log('Overlay canvas initialized.');
+} else {
+  console.error('ERROR: Overlay canvas element with ID "weather-overlay" not found!');
+}
+
 // Enable WebXR for AR
 renderer.xr.enabled = true;
 
@@ -31,6 +62,7 @@ const arButton = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'
 document.body.appendChild(arButton);
 
 // AR hit test variables
+
 let hitTestSource = null;
 let hitTestSourceRequested = false;
 let arRockPlaced = false;
@@ -41,19 +73,87 @@ scene.add(ambientLight);
 const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
 directionalLight.position.set(5, 10, 7.5);
 directionalLight.castShadow = true;
-directionalLight.shadow.mapSize.width = 1024;
-directionalLight.shadow.mapSize.height = 1024;
+directionalLight.shadow.mapSize.width = 2048;
+directionalLight.shadow.mapSize.height = 2048;
 directionalLight.shadow.camera.near = 1;
 directionalLight.shadow.camera.far = 20;
-directionalLight.shadow.camera.left = -5;
+directionalLight.shadow.camera.left = -4;
+directionalLight.shadow.camera.right = 4;
+directionalLight.shadow.camera.top = 4;
+directionalLight.shadow.camera.bottom = -4;
+directionalLight.shadow.camera.left = -5; // Expanded frustum slightly
 directionalLight.shadow.camera.right = 5;
 directionalLight.shadow.camera.top = 5;
 directionalLight.shadow.camera.bottom = -5;
+directionalLight.shadow.bias = -0.0005; // Added shadow bias
+directionalLight.shadow.camera.updateProjectionMatrix(); // Update projection matrix after changes
 scene.add(directionalLight);
 
-// Simplex noise for natural deformation
+// Day/Night toggle state and function
+let isDayMode = true;
+const dayAmbientIntensity = 0.7;
+const dayDirectionalIntensity = 0.8;
+const dayDirectionalColor = 0xffffff;
+
+const nightAmbientIntensity = 0.15; // Slightly more ambient for night to see silhouette
+const nightDirectionalIntensity = 0.3;
+const nightDirectionalColor = 0x6060aa; // Softer blue for moonlight
+
+function toggleDayNight() {
+  isDayMode = !isDayMode;
+  if (isDayMode) {
+    // DAY MODE
+    ambientLight.intensity = dayAmbientIntensity;
+    directionalLight.intensity = dayDirectionalIntensity;
+    directionalLight.color.setHex(dayDirectionalColor);
+    directionalLight.visible = true; // Sun is visible and casts shadows
+    renderer.setClearColor(0x87ceeb, 1); // Sky blue background
+    if (scene.fog) scene.fog = null; // Remove fog
+  } else {
+    // NIGHT MODE
+    ambientLight.intensity = nightAmbientIntensity;
+    directionalLight.visible = false; // Sun/moon light source off, rely on ambient and maybe point lights later
+    renderer.setClearColor(0x000020, 1); // Dark navy blue background
+    // Add or adjust fog for nighttime
+    if (!scene.fog) {
+      scene.fog = new THREE.Fog(0x000020, camera.near + 2, camera.far / 2.5); 
+    } else {
+      scene.fog.color.setHex(0x000020);
+      scene.fog.near = camera.near + 2; // Adjust as needed
+      scene.fog.far = camera.far / 2.5;  // Adjust as needed
+    }
+  }
+}
+window.toggleDayNight = toggleDayNight;
+
+// Parameters for the custom rock (will be updated from localStorage or defaults)
+let customRockParams = {
+    size: 50,
+    xScale: 50,
+    yScale: 50,
+    smoothness: 80,
+    surfaceDetail: 50
+};
+let currentRockType = 'granite'; // Default rock type
+
+// Rock material presets (copied from rock-customization/script.js)
+const rockPresets = {
+    granite: { color: 0x8b7355, roughness: 0.7, metalness: 0.1, name: "Granite" },
+    marble: { color: 0xf5f5dc, roughness: 0.3, metalness: 0.05, name: "Marble" },
+    sandstone: { color: 0xD2B48C, roughness: 0.8, metalness: 0.05, name: "Sandstone" },
+    limestone: { color: 0xb0a4b8, roughness: 0.65, metalness: 0.05, name: "Limestone" },
+    slate: { color: 0x6A737D, roughness: 0.6, metalness: 0.05, name: "Slate" },
+    basalt: { color: 0x36454f, roughness: 0.9, metalness: 0.02, name: "Basalt" },
+    quartzite: { color: 0xf0f8ff, roughness: 0.5, metalness: 0.15, name: "Quartzite" },
+    obsidian: { color: 0x1c1c1c, roughness: 0.1, metalness: 0.3, name: "Obsidian" }
+};
+
+// For storing the initial state of the first generated rock for reset
+let initialRockParams;
+let initialRockType;
+
+// Simplex noise for normal map generation (remains unchanged)
 function snoise3(x, y, z) {
-  // Simple pseudo-noise using trigonometric functions for demonstration
   return (
     Math.sin(x * 1.5 + Math.cos(z * 0.7)) +
     Math.cos(y * 2.1 + Math.sin(x * 0.5)) +
@@ -61,26 +161,108 @@ function snoise3(x, y, z) {
   ) / 3;
 }
 
-// Rock geometry (irregular ellipsoid with multi-frequency noise for natural shape)
-const rockGeometry = new THREE.SphereGeometry(1, 48, 36); // Higher-res sphere
-const position = rockGeometry.attributes.position;
-const vertex = new THREE.Vector3();
-for (let i = 0; i < position.count; i++) {
-  vertex.fromBufferAttribute(position, i);
-  // Ellipsoid scaling for river stone shape
-  vertex.y *= 0.52;
-  vertex.x *= 1.13;
-  // Multi-frequency noise for more natural, rougher shape
-  let noise =
-    snoise3(vertex.x * 1.1, vertex.y * 1.1, vertex.z * 1.1) * 0.07 +
-    snoise3(vertex.x * 2.7, vertex.y * 2.7, vertex.z * 2.7) * 0.025 +
-    snoise3(vertex.x * 5.5, vertex.y * 5.5, vertex.z * 5.5) * 0.012;
-  vertex.addScaledVector(vertex.clone().normalize(), noise);
-  position.setXYZ(i, vertex.x, vertex.y, vertex.z);
-}
-rockGeometry.computeVertexNormals();
+function loadCustomRockData() {
+    try {
+        const paramsString = localStorage.getItem('customRockParams');
+        const typeString = localStorage.getItem('customRockType');
 
-// Procedural normal map for roughness
+        if (paramsString && typeString) {
+            customRockParams = JSON.parse(paramsString);
+            currentRockType = typeString;
+            console.log('Loaded custom rock from localStorage:', customRockParams, currentRockType);
+        } else {
+            console.log('No custom rock data in localStorage, using defaults.');
+            // Defaults are already set globally
+        }
+    } catch (error) {
+        console.error('Error loading rock data from localStorage:', error);
+        // Defaults are already set, so we can proceed
+    }
+}
+
+function generateCustomRockGeometry(params, rockType) { // rockType is not used for geometry but passed for consistency
+    const actualSize = (params.size / 100) * 2.5 + 0.5;
+    const actualXScale = (params.xScale / 100) * 1.7 + 0.3;
+    const actualYScale = (params.yScale / 100) * 1.7 + 0.3;
+    const actualSmoothness = params.smoothness / 100;
+    const actualDetail = params.surfaceDetail / 100;
+
+    const newRockGeometry = new THREE.SphereGeometry(1, 128, 128);
+    
+    const vertices = newRockGeometry.attributes.position.array;
+    const vertexCount = vertices.length / 3;
+    
+    for (let i = 0; i < vertexCount; i++) {
+        const x = vertices[i * 3];
+        const y = vertices[i * 3 + 1];
+        const z = vertices[i * 3 + 2];
+        
+        const length = Math.sqrt(x * x + y * y + z * z);
+        const nx = x / length;
+        const ny = y / length;
+        const nz = z / length;
+        
+        const smoothnessFactor = actualSmoothness;
+        const jaggednessFactor = 1 - smoothnessFactor;
+        
+        const seed1 = 12.34, seed2 = 56.78, seed3 = 90.12, seed4 = 34.56, seed5 = 78.90, seed6 = 1.23;
+        let noiseSum = 0.0;
+        
+        noiseSum += (Math.sin((nx + 17.3 + seed1) * 3.7) * Math.cos((ny - 8.1 + seed2) * 3.1) + 
+                     Math.sin((ny + 23.5 + seed3) * 2.9) * Math.cos((nz - 12.9 + seed4) * 3.3) + 
+                     Math.sin((nz + 5.7 + seed5) * 3.5) * Math.cos((nx - 19.2 + seed6) * 2.7)) * 
+                     (0.12 + jaggednessFactor * 0.45) / 3;
+        
+        noiseSum += (Math.sin((nx - 11.8 + seed4) * 7.2) * Math.cos((ny + 31.1 + seed5) * 6.8) + 
+                     Math.sin((ny - 5.4 + seed6) * 6.5) * Math.cos((nz + 27.6 + seed1) * 7.1)) * 
+                     actualDetail * (0.08 + jaggednessFactor * 0.25) / 2;
+        
+        if (jaggednessFactor > 0.1) {
+            noiseSum += (Math.sin((nx + 3.9 + seed2) * 15.7) * Math.cos((ny - 22.4 + seed3) * 14.3) + 
+                         Math.sin((ny + 14.2 + seed4) * 16.1) * Math.cos((nz - 7.8 + seed5) * 15.9) + 
+                         Math.sin((nz + 33.1 + seed6) * 14.7) * Math.cos((nx - 1.5 + seed1) * 15.3)) * 
+                         actualDetail * jaggednessFactor * 0.18 / 3;
+        }
+        
+        if (jaggednessFactor > 0.3) {
+            noiseSum += (Math.sin((nx - 25.6 + seed5) * 32.1) * Math.cos((ny + 9.3 + seed6) * 31.7) + 
+                         Math.sin((ny - 18.7 + seed1) * 33.3) * Math.cos((nz + 2.4 + seed2) * 32.9)) * 
+                         actualDetail * jaggednessFactor * jaggednessFactor * 0.15 / 2;
+        }
+        
+        if (jaggednessFactor > 0.7) {
+            noiseSum += (Math.sin((nx + 13.1 + seed3) * 64.3) * Math.cos((ny - 28.9 + seed4) * 67.1) + 
+                         Math.sin((ny + 2.7 + seed5) * 71.7) * Math.cos((nz - 15.3 + seed6) * 59.3) + 
+                         Math.sin((nz + 20.8 + seed1) * 83.9) * Math.cos((nx - 34.5 + seed2) * 76.4)) * 
+                         actualDetail * Math.pow(jaggednessFactor, 3) * 0.2 / 3;
+        }
+        
+        noiseSum += ((Math.random() + Math.random() + Math.random()) / 3 - 0.5) * 
+                    jaggednessFactor * jaggednessFactor * 0.12;
+
+        const poleAttenuation = 1.0 - Math.pow(Math.abs(ny), 4.0);
+        let effectiveNoise = noiseSum * poleAttenuation;
+        let displacement = 1.0 + effectiveNoise;
+        displacement = Math.max(0.75, displacement);
+
+        const finalRadius = actualSize * displacement;
+        vertices[i * 3] = nx * finalRadius * actualXScale;
+        vertices[i * 3 + 1] = ny * finalRadius * actualYScale;
+        vertices[i * 3 + 2] = nz * finalRadius;
+    }
+    
+    newRockGeometry.attributes.position.needsUpdate = true;
+    newRockGeometry.computeVertexNormals();
+    return newRockGeometry;
+}
+
+// Load custom rock data or use defaults
+loadCustomRockData();
+
+// Generate custom rock geometry
+let rockGeometry = generateCustomRockGeometry(customRockParams, currentRockType);
+
+// Procedural normal map for roughness (uses snoise3 defined above)
 const normalCanvas = document.createElement('canvas');
 normalCanvas.width = 256;
 normalCanvas.height = 256;
@@ -91,25 +273,38 @@ for (let y = 0; y < 256; y++) {
     const ny = y / 256 - 0.5;
     const n = snoise3(nx * 8, ny * 8, 0) * 0.5 + 0.5;
     const shade = Math.floor(128 + n * 127);
-    ctx.fillStyle = `rgb(${shade},${shade},255)`;
+    ctx.fillStyle = `rgb(${shade},${shade},255)`; // Blue channel for normal map convention
     ctx.fillRect(x, y, 1, 1);
   }
 }
 const normalMap = new THREE.CanvasTexture(normalCanvas);
 normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping;
 
-const rockMaterial = new THREE.MeshStandardMaterial({
-  color: 0x7b8a8b, // Gray-blue river stone
-  roughness: 0.85,
-  metalness: 0.18,
+// Create custom rock material
+const rockPreset = rockPresets[currentRockType] || rockPresets.granite; // Fallback
+let rockMaterial = new THREE.MeshStandardMaterial({
+  color: rockPreset.color,
+  roughness: rockPreset.roughness,
+  metalness: rockPreset.metalness,
   flatShading: false,
   normalMap: normalMap,
   normalScale: new THREE.Vector2(1.2, 1.2),
 });
-const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+
+// Create rock mesh (rock is already declared globally via 'let rock;' at the top of the module by Three.js examples style, or should be)
+// If 'rock' is not declared globally, uncomment the line below:
+// let rock;
+rock = new THREE.Mesh(rockGeometry, rockMaterial);
 rock.castShadow = true;
 rock.receiveShadow = true;
 scene.add(rock);
+
+// Function to store the initial state of the rock for reset
+function storeInitialRockState() {
+    initialRockParams = JSON.parse(JSON.stringify(customRockParams)); // Deep copy
+    initialRockType = currentRockType;
+}
+storeInitialRockState(); // Store after the first rock is created
 
 // Box size for ground/rock positioning
 const boxSize = 2.5;
@@ -123,356 +318,36 @@ ground.position.y = -boxSize / 2 + 0.01; // Slightly above the box bottom
 scene.add(ground);
 ground.receiveShadow = true;
 
-// Position the rock so it sits on the bottom of the box
-rock.position.y = -((boxSize / 2) - 1 * 0.55); // 1 is the rock radius, 0.55 is the flattening factor
+// Physics variables for bounce
+let groundY = 0; // Will be set dynamically AFTER rock is positioned
+// Position the rock so it sits on the ground plane
+rock.updateMatrixWorld(); // Ensure world matrix is up to date for boundingBox calculation
+const boundingBox = new THREE.Box3().setFromObject(rock);
+const groundLevel = ground.position.y;
+// The rock's pivot is at its center. We want its bottom (boundingBox.min.y) to be at groundLevel.
+// The amount to shift the rock's center (rock.position.y) is groundLevel - boundingBox.min.y.
+// However, rock.position.y is relative to its parent (scene origin if not nested).
+// The offset from the rock's current origin (likely 0,0,0 initially) to its bottom is boundingBox.min.y (if origin is 0,0,0).
+// So, new rock.position.y = groundLevel - boundingBox.min.y (if rock was at origin)
+// More robust: current rock's center is rock.position.y. Its world bottom is boundingBox.min.y.
+// We want new world bottom to be groundLevel. So, shift needed is groundLevel - boundingBox.min.y.
+// rock.position.y += (groundLevel - boundingBox.min.y);
+// Let's simplify: the distance from rock's origin to its bottom edge is (rock.position.y - boundingBox.min.y)
+rock.position.y = groundLevel - boundingBox.min.y; // Position rock bottom at groundLevel
+if (isNaN(rock.position.y) || !isFinite(rock.position.y)) { 
+  console.warn('Initial rock.position.y is NaN or Infinity. Setting to 0.'); 
+  rock.position.y = 0; 
+}
+groundY = rock.position.y; // Set groundY for physics
 
-// Physics variables for bouncing
 let velocity = 0;
 let isBouncing = false;
-const gravity = -0.025; // Gravity acceleration
-const bounceImpulse = 0.32; // Initial velocity when clicked
-const groundY = rock.position.y;
-
-let rainParticles = null;
-let snowParticles = null;
-let snowParticles2 = null;
-let fogEnabled = false;
-let thunderTimeout = null;
-
-// Overlay canvas for weather effects
-const overlay = document.getElementById('weather-overlay');
-const overlayCtx = overlay.getContext('2d');
-function resizeOverlay() {
-  overlay.width = window.innerWidth;
-  overlay.height = window.innerHeight;
-}
-resizeOverlay();
-window.addEventListener('resize', resizeOverlay);
-
-// Overlay state
-let overlayState = {
-  rainStreaks: [],
-  rainSplashes: [],
-  snowAccum: false,
-  fogPlanes: [],
-  lightning: false,
-  clouds: [],
-  desaturate: false,
-  shake: 0,
-  sun: false,
-};
-
-// Full-screen 2D snowflake overlay state
-let overlaySnowflakes = [];
-
-function initOverlaySnowflakes() {
-  overlaySnowflakes = [];
-  for (let i = 0; i < 320; i++) {
-    overlaySnowflakes.push({
-      x: Math.random() * overlay.width,
-      y: Math.random() * overlay.height,
-      r: 1.5 + Math.random() * 3.5,
-      speed: 1.2 + Math.random() * 2.2,
-      drift: (Math.random() - 0.5) * 1.2,
-      phase: Math.random() * Math.PI * 2,
-    });
-  }
-}
-
-window.addEventListener('resize', () => {
-  resizeOverlay();
-  if (overlayState.snowAccum) initOverlaySnowflakes();
-});
-
-// Utility: draw a simple splash
-function drawSplash(ctx, x, y, r, alpha) {
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, 2 * Math.PI);
-  ctx.strokeStyle = '#b7d3e6';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.restore();
-}
-
-// Utility: draw a simple snow accumulation
-function drawSnowAccum(ctx) {
-  ctx.save();
-  ctx.globalAlpha = 0.25;
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, ctx.canvas.height * 0.85, ctx.canvas.width, ctx.canvas.height * 0.15);
-  ctx.restore();
-}
-
-// Utility: draw a lightning bolt
-function drawLightning(ctx) {
-  ctx.save();
-  ctx.globalAlpha = 0.7;
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  let x = ctx.canvas.width * (0.3 + 0.4 * Math.random());
-  let y = 0;
-  ctx.moveTo(x, y);
-  for (let i = 0; i < 8; i++) {
-    x += (Math.random() - 0.5) * 40;
-    y += ctx.canvas.height / 10;
-    ctx.lineTo(x, y);
-  }
-  ctx.stroke();
-  ctx.restore();
-}
-
-// Utility: draw a simple cloud
-function drawCloud(ctx, x, y, r, alpha) {
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.ellipse(x, y, r * 1.2, r, 0, 0, 2 * Math.PI);
-  ctx.ellipse(x + r, y, r, r * 0.8, 0, 0, 2 * Math.PI);
-  ctx.ellipse(x - r, y, r, r * 0.8, 0, 0, 2 * Math.PI);
-  ctx.fill();
-  ctx.restore();
-}
-
-// Utility: draw full-screen rain streak overlay
-function drawRainStreakOverlay(ctx) {
-  for (let i = 0; i < 120; i++) {
-    const x = Math.random() * ctx.canvas.width;
-    const y = Math.random() * ctx.canvas.height;
-    const len = 40 + Math.random() * 60;
-    ctx.save();
-    ctx.globalAlpha = 0.10 + Math.random() * 0.08;
-    ctx.strokeStyle = '#b7d3e6';
-    ctx.lineWidth = 1.5 + Math.random();
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x, y + len);
-    ctx.stroke();
-    ctx.restore();
-  }
-}
-
-// Utility: draw full-screen drifting snow overlay
-function drawFullScreenSnowOverlay(ctx) {
-  for (let i = 0; i < 24; i++) {
-    const x = (performance.now() / 12 + i * 120) % ctx.canvas.width;
-    const y = ctx.canvas.height * 0.1 + Math.sin(performance.now() / 600 + i) * 60;
-    ctx.save();
-    ctx.globalAlpha = 0.06 + Math.random() * 0.06;
-    ctx.beginPath();
-    ctx.ellipse(x, y, 120, 28, 0, 0, 2 * Math.PI);
-    ctx.fillStyle = '#fff';
-    ctx.fill();
-    ctx.restore();
-  }
-}
-
-// Utility: draw multiple full-screen lightning bolts
-function drawFullScreenLightning(ctx) {
-  for (let bolt = 0; bolt < 3 + Math.floor(Math.random() * 2); bolt++) {
-    ctx.save();
-    ctx.globalAlpha = 0.38 + Math.random() * 0.32;
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 4 + Math.random() * 2;
-    ctx.beginPath();
-    let x = ctx.canvas.width * (0.2 + 0.6 * Math.random());
-    let y = 0;
-    ctx.moveTo(x, y);
-    for (let i = 0; i < 8; i++) {
-      x += (Math.random() - 0.5) * 40;
-      y += ctx.canvas.height / 10;
-      ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
-  // Add a full-screen white flash for extra effect
-  ctx.save();
-  ctx.globalAlpha = 0.18 + Math.random() * 0.12;
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  ctx.restore();
-}
-
-// Utility: draw stormy dark overlay
-function drawStormOverlay(ctx) {
-  ctx.save();
-  ctx.globalAlpha = 0.32;
-  ctx.fillStyle = '#222b3a';
-  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  ctx.restore();
-}
-
-// Thunderstorm state
-let thunderFlash = false;
-let thunderFlashTimer = 0;
-let thunderShake = 0;
-
-// Snow cap mesh for rock accumulation
-let snowCap = null;
-let snowCapTimeout = null;
-let wasRockAtRest = true;
-
-function addSnowCap() {
-  if (!snowCap) {
-    const snowCapGeometry = new THREE.SphereGeometry(1.05, 32, 18, 0, Math.PI * 2, 0, Math.PI * 0.6);
-    snowCap = new THREE.Mesh(
-      snowCapGeometry,
-      new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        roughness: 0.7,
-        metalness: 0.1,
-        transparent: true,
-        opacity: 0.98,
-      })
-    );
-    snowCap.position.copy(rock.position);
-    snowCap.position.y += 0.25;
-    snowCap.scale.set(1.05, 0.45, 1.05);
-    snowCap.castShadow = false;
-    snowCap.receiveShadow = false;
-  }
-  if (!scene.children.includes(snowCap)) scene.add(snowCap);
-}
-function removeSnowCap() {
-  if (snowCap && scene.children.includes(snowCap)) scene.remove(snowCap);
-}
-
-// Utility: draw a sun icon
-function drawSunIcon(ctx, x, y, r) {
-  ctx.save();
-  // Sun core
-  ctx.globalAlpha = 0.92;
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, 2 * Math.PI);
-  ctx.fillStyle = '#ffe066';
-  ctx.shadowColor = '#ffe066';
-  ctx.shadowBlur = 16;
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  // Rays
-  ctx.strokeStyle = '#ffe066';
-  ctx.lineWidth = 3;
-  for (let i = 0; i < 12; i++) {
-    const angle = (i / 12) * Math.PI * 2;
-    ctx.beginPath();
-    ctx.moveTo(x + Math.cos(angle) * (r + 6), y + Math.sin(angle) * (r + 6));
-    ctx.lineTo(x + Math.cos(angle) * (r + 18), y + Math.sin(angle) * (r + 18));
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-// Update overlays for each weather type
-function updateOverlayForWeather(main) {
-  overlayState.rainStreaks = [];
-  overlayState.rainSplashes = [];
-  overlayState.snowAccum = false;
-  overlayState.fogPlanes = [];
-  overlayState.lightning = false;
-  overlayState.clouds = [];
-  overlayState.desaturate = false;
-  overlayState.shake = 0;
-  overlayState.sun = false;
-  if (main.includes('rain')) {
-    // Rain streaks
-    for (let i = 0; i < 60; i++) {
-      overlayState.rainStreaks.push({
-        x: Math.random() * overlay.width,
-        y: Math.random() * overlay.height,
-        len: 30 + Math.random() * 30,
-        speed: 8 + Math.random() * 4,
-      });
-    }
-    // Rain splashes
-    for (let i = 0; i < 10; i++) {
-      overlayState.rainSplashes.push({
-        x: Math.random() * overlay.width,
-        y: overlay.height * 0.85 + Math.random() * overlay.height * 0.1,
-        r: 8 + Math.random() * 8,
-        alpha: 0.7 + Math.random() * 0.3,
-        t: Math.random() * 60,
-      });
-    }
-    // Wet sheen
-    rockMaterial.metalness = 0.35;
-    rockMaterial.roughness = 0.5;
-  } else {
-    rockMaterial.metalness = 0.18;
-    rockMaterial.roughness = 0.85;
-  }
-  if (main.includes('snow')) {
-    overlayState.snowAccum = true;
-    initOverlaySnowflakes();
-    addSnowCap();
-  } else {
-    removeSnowCap();
-  }
-  if (main.includes('fog') || main.includes('mist')) {
-    overlayState.fogPlanes = [
-      { y: overlay.height * 0.7, alpha: 0.18 },
-      { y: overlay.height * 0.8, alpha: 0.12 },
-      { y: overlay.height * 0.9, alpha: 0.08 },
-    ];
-    overlayState.desaturate = true;
-  }
-  if (main.includes('thunder')) {
-    overlayState.lightning = true;
-    overlayState.shake = 1;
-    // Heavier rain for thunderstorm
-    overlayState.rainStreaks = [];
-    for (let i = 0; i < 120; i++) {
-      overlayState.rainStreaks.push({
-        x: Math.random() * overlay.width,
-        y: Math.random() * overlay.height,
-        len: 40 + Math.random() * 40,
-        speed: 12 + Math.random() * 6,
-      });
-    }
-    // Heavier 3D rain
-    if (rainParticles) {
-      scene.remove(rainParticles);
-      rainParticles.geometry.dispose();
-      rainParticles.material.dispose();
-      rainParticles = null;
-    }
-    const rainCount = 500;
-    const rainGeometry = new THREE.BufferGeometry();
-    const rainPositions = [];
-    for (let i = 0; i < rainCount; i++) {
-      let x, z;
-      do {
-        x = (Math.random() - 0.5) * 2.5;
-        z = (Math.random() - 0.5) * 2.5;
-      } while (Math.abs(x) < 0.7 && Math.abs(z) < 0.7);
-      rainPositions.push(x, Math.random() * 2.5, z);
-    }
-    rainGeometry.setAttribute('position', new THREE.Float32BufferAttribute(rainPositions, 3));
-    const rainMaterial = new THREE.PointsMaterial({ color: 0xaaaaee, size: 0.05, transparent: true });
-    rainParticles = new THREE.Points(rainGeometry, rainMaterial);
-    scene.add(rainParticles);
-  }
-  if (main.includes('cloud')) {
-    for (let i = 0; i < 5; i++) {
-      overlayState.clouds.push({
-        x: Math.random() * overlay.width,
-        y: 60 + Math.random() * 80,
-        r: 60 + Math.random() * 40,
-        alpha: 0.18 + Math.random() * 0.12,
-        speed: 0.2 + Math.random() * 0.1,
-      });
-    }
-  }
-  if (main.includes('clear') || main.includes('cloud')) {
-    overlayState.sun = true;
-  }
-}
+const gravity = -0.025; // Adjusted for a slightly more pronounced effect
+const bounceImpulse = 0.45; // Adjusted for a slightly more pronounced effect
 
 // Animate overlays
 function animateOverlay() {
+  // console.log('animateOverlay called'); // DEBUG: Check if called
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
   // Rain streaks
   overlayState.rainStreaks.forEach(streak => {
@@ -496,24 +371,73 @@ function animateOverlay() {
   if (overlayState.snowAccum) {
     drawSnowAccum(overlayCtx);
   }
-  // Fog planes
-  overlayState.fogPlanes.forEach(fog => {
-    overlayCtx.save();
-    overlayCtx.globalAlpha = fog.alpha;
-    overlayCtx.fillStyle = '#fff';
-    overlayCtx.fillRect(0, fog.y, overlay.width, overlay.height * 0.1);
-    overlayCtx.restore();
-  });
+  // Fog particles
+  if (overlayState.fogParticles.length > 0) {
+    // overlayCtx.fillStyle = 'rgba(190, 195, 200, 1)'; // Base color for particles, alpha controlled per particle - Now using gradient
+    overlayState.fogParticles.forEach(p => {
+      p.x += p.speedX;
+      p.y += p.speedY;
+      p.life--;
+
+      // Fade in/out logic
+      const lifeRatio = p.life / p.maxLife;
+      if (lifeRatio > 0.8) { // Fade in for first 20% of life
+        p.currentAlpha = p.initialAlpha * ((1 - lifeRatio) / 0.2);
+      } else if (lifeRatio < 0.2) { // Fade out for last 20% of life
+        p.currentAlpha = p.initialAlpha * (lifeRatio / 0.2);
+      } else { // Stable alpha for middle 60%
+        p.currentAlpha = p.initialAlpha;
+      }
+      p.currentAlpha = Math.max(0, Math.min(p.initialAlpha, p.currentAlpha)); // Clamp alpha
+
+      // Draw particle
+      if (p.currentAlpha > 0) {
+        overlayCtx.globalAlpha = p.currentAlpha; // Overall particle opacity
+
+        const gradient = overlayCtx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.radius);
+        // For dense fog, particles should be more uniformly opaque within their gradient
+        gradient.addColorStop(0, 'rgba(170, 172, 175, 0.8)'); // Center of particle (dense fog color, high alpha)
+        gradient.addColorStop(0.6, 'rgba(175, 177, 180, 0.5)');
+        gradient.addColorStop(1, 'rgba(180, 182, 185, 0)');   // Transparent edge
+
+        overlayCtx.fillStyle = gradient;
+        overlayCtx.beginPath();
+        overlayCtx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        overlayCtx.fill();
+      }
+
+      // Reset particle if life is over or off-screen
+      if (p.life <= 0 || p.x + p.radius < 0 || p.x - p.radius > overlay.width || p.y + p.radius < 0 || p.y - p.radius > overlay.height) {
+        p.x = Math.random() * overlay.width;
+        p.y = overlay.height * (0.3 + Math.random() * 0.7) + p.radius; // Respawn towards bottom, ensuring on screen
+        p.life = p.maxLife * (Math.random() * 0.5 + 0.75); // Reset life, bit varied
+        p.currentAlpha = 0; // Start faded out
+        p.speedX = (Math.random() - 0.5) * 0.3;
+        p.speedY = (Math.random() - 0.5) * 0.1;
+      }
+    });
+    overlayCtx.globalAlpha = 1; // Reset global alpha
+  }
+
+  // Clouds animation
+  if(overlayState.clouds && overlayState.clouds.length > 0) {
+    overlayState.clouds.forEach(cloud => {
+      cloud.x += cloud.speed;
+      // Wrap around logic for clouds
+      if (cloud.speed > 0 && cloud.x - cloud.r > overlay.width) {
+        cloud.x = -cloud.r * 2; // Reset to left, considering cloud width (approx r*2 or more)
+      } else if (cloud.speed < 0 && cloud.x + cloud.r < 0) {
+        cloud.x = overlay.width + cloud.r * 2; // Reset to right
+      }
+      drawCloud(overlayCtx, cloud.x, cloud.y, cloud.r, cloud.alpha);
+    });
+  }
+
   // Lightning
   if (overlayState.lightning && Math.random() < 0.01) {
     drawLightning(overlayCtx);
+    // Cloud drawing logic moved before this block
   }
-  // Clouds
-  overlayState.clouds.forEach(cloud => {
-    drawCloud(overlayCtx, cloud.x, cloud.y, cloud.r, cloud.alpha);
-    cloud.x += cloud.speed;
-    if (cloud.x - cloud.r > overlay.width) cloud.x = -cloud.r;
-  });
   // Desaturate (fog/mist)
   if (overlayState.desaturate) {
     overlayCtx.save();
@@ -527,10 +451,13 @@ function animateOverlay() {
     drawRainStreakOverlay(overlayCtx);
   }
   // Full-screen snow overlay
-  if (overlayState.snowAccum) {
-    drawFullScreenSnowOverlay(overlayCtx);
+  if (overlayState.sunPosition) {
+    drawSunIcon(overlayCtx, overlayState.sunPosition.x, overlayState.sunPosition.y, overlayState.sunPosition.r);
   }
-  // Stormy overlay for thunderstorm
+  if (overlayState.moonPosition) {
+    drawMoonIcon(overlayCtx, overlayState.moonPosition.x, overlayState.moonPosition.y, overlayState.moonPosition.r);
+  }
+  // Full-screen storm overlay
   if (overlayState.lightning) {
     drawStormOverlay(overlayCtx);
   }
@@ -565,7 +492,143 @@ function animateOverlay() {
   }
 }
 
+// Placeholder 2D Overlay Drawing Functions
+function drawSplash(ctx, x, y, r, alpha) { /* console.log('drawSplash called'); */ }
+function drawSnowAccum(ctx) { /* console.log('drawSnowAccum called'); */ }
+function drawLightning(ctx) {
+  // console.log('[Weather Overlay] drawLightning called - drawing streak');
+  const startX = Math.random() * ctx.canvas.width;
+  let y = 0;
+  const segments = Math.floor(Math.random() * 5) + 5; // 5-9 segments
+  let currentX = startX;
+
+  ctx.save();
+  ctx.strokeStyle = `rgba(255, 255, 220, ${Math.random() * 0.2 + 0.8})`; // Brighter yellow, more opaque
+  ctx.lineWidth = Math.random() * 4 + 3; // Thicker bolt (3px to 7px)
+  ctx.beginPath();
+  ctx.moveTo(currentX, y);
+
+  for (let i = 0; i < segments; i++) {
+    const segmentLength = (ctx.canvas.height / segments) * (Math.random() * 0.5 + 0.5);
+    y += segmentLength;
+    currentX += (Math.random() - 0.5) * 40; // Jaggedness
+    ctx.lineTo(currentX, y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+function drawCloud(ctx, x, y, r, alpha) {
+  ctx.save();
+  ctx.globalAlpha = alpha; // Apply overall cloud alpha
+
+  const createCloudPartGradient = (cx, cy, cr, baseAlpha, isHorizontalStretch = false) => {
+    // For horizontally stretched parts, the gradient might need to be elliptical too, 
+    // but for simplicity, we'll use a circular gradient with sharper falloff.
+    // A true elliptical gradient isn't directly supported, so we make the circle gradient sharper.
+    const gradient = ctx.createRadialGradient(cx, cy, cr * (isHorizontalStretch ? 0.3 : 0.1), cx, cy, cr);
+    // Less blurry: sharper transition
+    gradient.addColorStop(0, `rgba(240, 242, 245, ${baseAlpha * 0.95})`); // Brighter, more opaque center
+    gradient.addColorStop(0.7, `rgba(230, 232, 235, ${baseAlpha * 0.5})`); // Stays opaque longer
+    gradient.addColorStop(1, `rgba(220, 222, 225, 0)`);      // Sharper drop to transparent
+    return gradient;
+  };
+
+  // Main cloud body (center) - make it wider using ellipse or by scaling context
+  // Using ellipse for simplicity for the main body
+  let mainBodyWidth = r * 1.8; // Make main body wider than it is tall
+  let mainBodyHeight = r * 0.9; // Make it a bit flatter
+  ctx.fillStyle = createCloudPartGradient(x, y, Math.max(mainBodyWidth, mainBodyHeight) / 2, 0.7, true);
+  ctx.beginPath();
+  ctx.ellipse(x, y, mainBodyWidth / 2, mainBodyHeight / 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Add a few smaller, slightly offset puffs to give it texture and length
+  // Puff 1 (left-ish)
+  let puffX = x - mainBodyWidth * 0.35;
+  let puffY = y + mainBodyHeight * 0.1;
+  let puffR = r * 0.55;
+  ctx.fillStyle = createCloudPartGradient(puffX, puffY, puffR, 0.65);
+  ctx.beginPath();
+  ctx.arc(puffX, puffY, puffR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Puff 2 (right-ish)
+  puffX = x + mainBodyWidth * 0.35;
+  puffY = y - mainBodyHeight * 0.05;
+  puffR = r * 0.6;
+  ctx.fillStyle = createCloudPartGradient(puffX, puffY, puffR, 0.75);
+  ctx.beginPath();
+  ctx.arc(puffX, puffY, puffR, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Puff 3 (farther right, smaller, for more length)
+  puffX = x + mainBodyWidth * 0.6;
+  puffY = y + mainBodyHeight * 0.15;
+  puffR = r * 0.45;
+  ctx.fillStyle = createCloudPartGradient(puffX, puffY, puffR, 0.6);
+  ctx.beginPath();
+  ctx.arc(puffX, puffY, puffR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Puff 4 (top-ish, for some vertical texture)
+  puffX = x + mainBodyWidth * 0.05;
+  puffY = y - mainBodyHeight * 0.3;
+  puffR = r * 0.5;
+  ctx.fillStyle = createCloudPartGradient(puffX, puffY, puffR, 0.8);
+  ctx.beginPath();
+  ctx.arc(puffX, puffY, puffR, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore(); // This also resets globalAlpha
+}
+function drawRainStreakOverlay(ctx) { console.log('[Weather Overlay] drawRainStreakOverlay called - placeholder'); }
+function drawFullScreenSnowOverlay(ctx) { console.log('[Weather Overlay] drawFullScreenSnowOverlay called - placeholder'); }
+function drawStormOverlay(ctx) { console.log('[Weather Overlay] drawStormOverlay called - placeholder'); }
+function drawFullScreenLightning(ctx) { console.log('[Weather Overlay] drawFullScreenLightning called - placeholder'); }
+function drawMoonIcon(ctx, x, y, r) {
+  console.log('[Weather Overlay] drawMoonIcon called with:', x, y, r);
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(240, 240, 255, 0.9)'; // Pale, slightly bluish white for moon
+  ctx.beginPath();
+  // Draw main circle for moon
+  ctx.arc(x, y, r, 0, 2 * Math.PI, false);
+  ctx.fill();
+
+  // Create crescent by overlaying a darker circle (simulating shadow)
+  // Offset this circle slightly to the right and make it a bit smaller or same size
+  ctx.globalCompositeOperation = 'destination-out'; // This will effectively subtract the new shape
+  ctx.beginPath();
+  ctx.arc(x - r * 0.4, y - r * 0.2, r * 0.95, 0, 2 * Math.PI, false);
+  ctx.fill();
+  
+  ctx.restore(); // This will also reset globalCompositeOperation to 'source-over'
+}
+
+function drawSunIcon(ctx, x, y, r) {
+  console.log('[Weather Overlay] drawSunIcon called with:', x, y, r);
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(255, 223, 0, 0.8)'; // Sunny yellow
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, 2 * Math.PI);
+  ctx.fill();
+
+  // Optional: Sun rays
+  ctx.strokeStyle = 'rgba(255, 223, 0, 0.6)';
+  ctx.lineWidth = r * 0.15;
+  for (let i = 0; i < 8; i++) {
+    const angle = (i / 8) * 2 * Math.PI;
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(angle) * r * 1.2, y + Math.sin(angle) * r * 1.2);
+    ctx.lineTo(x + Math.cos(angle) * r * 1.7, y + Math.sin(angle) * r * 1.7);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function addRain() {
+  console.log('[Weather Effect] addRain called');
   if (rainParticles) {
     scene.remove(rainParticles);
     rainParticles.geometry.dispose();
@@ -576,13 +639,9 @@ function addRain() {
   const rainGeometry = new THREE.BufferGeometry();
   const rainPositions = [];
   for (let i = 0; i < rainCount; i++) {
-    // Bias spawn away from the center (rock area)
-    let x, z;
-    do {
-      x = (Math.random() - 0.5) * 2.5;
-      z = (Math.random() - 0.5) * 2.5;
-    } while (Math.abs(x) < 0.7 && Math.abs(z) < 0.7); // avoid center
-    rainPositions.push(x, Math.random() * 2.5, z);
+    let x = (Math.random() - 0.5) * 20; // Spread X from -10 to 10
+    let z = (Math.random() - 0.5) * 20; // Spread Z from -10 to 10
+    rainPositions.push(x, 4 + Math.random() * 3, z); // Generate rain higher up (Y from 4 to 7)
   }
   rainGeometry.setAttribute('position', new THREE.Float32BufferAttribute(rainPositions, 3));
   const rainMaterial = new THREE.PointsMaterial({ color: 0xaaaaee, size: 0.05, transparent: true });
@@ -600,6 +659,7 @@ function removeRain() {
 }
 
 function addSnow() {
+  console.log('[Weather Effect] addSnow called');
   // First layer (existing)
   if (snowParticles) {
     scene.remove(snowParticles);
@@ -607,46 +667,63 @@ function addSnow() {
     snowParticles.material.dispose();
     snowParticles = null;
   }
-  const snowCount = 120;
+  const snowCount = 10000; // Further increased for very dense snowfall
   const snowGeometry = new THREE.BufferGeometry();
   const snowPositions = [];
   for (let i = 0; i < snowCount; i++) {
-    // Bias spawn away from the center (rock area)
-    let x, z;
-    do {
-      x = (Math.random() - 0.5) * 2.5;
-      z = (Math.random() - 0.5) * 2.5;
-    } while (Math.abs(x) < 0.7 && Math.abs(z) < 0.7);
-    snowPositions.push(x, Math.random() * 2.5, z);
+    let x = (Math.random() - 0.5) * 20; // Spread X from -10 to 10
+    let z = (Math.random() - 0.5) * 20; // Spread Z from -10 to 10
+    snowPositions.push(x, 4 + Math.random() * 3, z); // Generate snow higher up (Y from 4 to 7)
   }
   snowGeometry.setAttribute('position', new THREE.Float32BufferAttribute(snowPositions, 3));
   const snowflakeTexture = createSnowflakeTexture();
-  const snowMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.13, transparent: true, map: snowflakeTexture, alphaTest: 0.2 });
+  const snowMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.03, transparent: true, map: snowflakeTexture, alphaTest: 0.2 }); // Further reduced size
   snowParticles = new THREE.Points(snowGeometry, snowMaterial);
   scene.add(snowParticles);
+}
 
-  // Second layer (larger, slower flakes)
-  if (snowParticles2) {
-    scene.remove(snowParticles2);
-    snowParticles2.geometry.dispose();
-    snowParticles2.material.dispose();
-    snowParticles2 = null;
+function addSnowCap(rockMesh) {
+  console.log('[addSnowCap] Called with rockMesh:', rockMesh);
+  if (!rockMesh) {
+    console.error('[addSnowCap] rockMesh is null or undefined.');
+    return;
   }
-  const snowCount2 = 50;
-  const snowGeometry2 = new THREE.BufferGeometry();
-  const snowPositions2 = [];
-  for (let i = 0; i < snowCount2; i++) {
-    let x, z;
-    do {
-      x = (Math.random() - 0.5) * 2.5;
-      z = (Math.random() - 0.5) * 2.5;
-    } while (Math.abs(x) < 0.7 && Math.abs(z) < 0.7);
-    snowPositions2.push(x, Math.random() * 2.5, z);
+  if (snowCap) { // Remove existing snow cap first
+    scene.remove(snowCap);
+    if (snowCap.geometry) snowCap.geometry.dispose();
+    if (snowCap.material) snowCap.material.dispose();
+    snowCap = null;
   }
-  snowGeometry2.setAttribute('position', new THREE.Float32BufferAttribute(snowPositions2, 3));
-  const snowMaterial2 = new THREE.PointsMaterial({ color: 0xffffff, size: 0.22, transparent: true, opacity: 0.7, map: snowflakeTexture, alphaTest: 0.2 });
-  snowParticles2 = new THREE.Points(snowGeometry2, snowMaterial2);
-  scene.add(snowParticles2);
+
+  const rockBoundingBox = new THREE.Box3().setFromObject(rockMesh);
+  const rockTopY = rockBoundingBox.max.y;
+  const rockWidth = rockBoundingBox.max.x - rockBoundingBox.min.x;
+  const rockDepth = rockBoundingBox.max.z - rockBoundingBox.min.z;
+  console.log(`[addSnowCap] Rock BBox: min=${JSON.stringify(rockBoundingBox.min)}, max=${JSON.stringify(rockBoundingBox.max)}`);
+  console.log(`[addSnowCap] Rock Top Y: ${rockTopY}, Width: ${rockWidth}, Depth: ${rockDepth}`);
+
+  // Make snow cap slightly smaller than the rock's width/depth to look more natural
+  const capRadius = Math.min(rockWidth, rockDepth) * 0.4;
+  const capHeight = 0.1; // Thin layer of snow
+
+  const snowCapGeometry = new THREE.CylinderGeometry(capRadius, capRadius * 0.9, capHeight, 32);
+  const snowCapMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0xffffff, 
+    roughness: 0.8,
+    metalness: 0.0
+  });
+  snowCap = new THREE.Mesh(snowCapGeometry, snowCapMaterial);
+
+  // Position the snow cap on top of the rock
+  // The cylinder's origin is at its center, so position its bottom at rockTopY
+  snowCap.position.set(rockMesh.position.x, rockTopY + capHeight / 2 - 0.02, rockMesh.position.z); // a tiny bit lower to sink in
+  snowCap.castShadow = true;
+  snowCap.receiveShadow = true; // Snow cap can receive shadows from other objects if any
+
+  console.log('[addSnowCap] SnowCap mesh created:', snowCap);
+  console.log('[addSnowCap] SnowCap position target:', snowCap.position);
+  scene.add(snowCap);
+  console.log('[Weather Effect] Snow cap added to scene.');
 }
 
 function removeSnow() {
@@ -656,15 +733,16 @@ function removeSnow() {
     snowParticles.material.dispose();
     snowParticles = null;
   }
-  if (snowParticles2) {
-    scene.remove(snowParticles2);
-    snowParticles2.geometry.dispose();
-    snowParticles2.material.dispose();
-    snowParticles2 = null;
+  if (snowCap) {
+    scene.remove(snowCap);
+    if (snowCap.geometry) snowCap.geometry.dispose();
+    if (snowCap.material) snowCap.material.dispose();
+    snowCap = null;
   }
 }
 
 function addFog() {
+  console.log('[Weather Effect] addFog called');
   if (!fogEnabled) {
     scene.fog = new THREE.Fog(0xcfd8dc, 2, 7);
     fogEnabled = true;
@@ -681,9 +759,14 @@ function removeFog() {
 function triggerThunder() {
   // Simulate a lightning flash by briefly increasing light intensity
   const originalIntensity = directionalLight.intensity;
-  directionalLight.intensity = 2.5;
+  const originalAmbientIntensity = ambientLight.intensity;
+  directionalLight.intensity = 4.5; // Increased flash intensity
+  ambientLight.intensity *= 2.0; // Boost ambient light too
+  thunderFlash = true;
   setTimeout(() => {
     directionalLight.intensity = originalIntensity;
+    ambientLight.intensity = originalAmbientIntensity; // Restore ambient light
+    thunderFlash = false; // Reset the 2D flash flag shortly after
   }, 100 + Math.random() * 200);
   // Schedule next thunder flash
   thunderTimeout = setTimeout(triggerThunder, 2000 + Math.random() * 3000);
@@ -694,20 +777,31 @@ function stopThunder() {
     clearTimeout(thunderTimeout);
     thunderTimeout = null;
     directionalLight.intensity = 0.3; // restore to thunderstorm value
+    thunderFlash = false; // Ensure 2D flash is also off
   }
 }
 
 // Time simulation variables
 let simulatedYears = 0;
+let lastTime = 0; // For delta time calculation in animation loop
 let yearsPerSecond = 1;
-window._yearsPerSecond = yearsPerSecond;
+// window._yearsPerSecond = yearsPerSecond; // Keep this if used elsewhere, or remove if setTimeSpeed is the sole controller
+
+function setTimeSpeed(newSpeed) {
+  yearsPerSecond = newSpeed;
+  window._yearsPerSecond = newSpeed; // Update the underscored version too for now
+  console.log(`Time speed set to: ${newSpeed} years/sec`);
+  // If we want immediate feedback on the display without waiting for the next animation frame:
+  // updateSimYearsDisplay(); // Or, let the animation loop handle it.
+}
+window.setTimeSpeed = setTimeSpeed;
 
 // Erosion parameters
 let baseErosionRate = 0.0000001; // per year
 function getWeatherErosionMultiplier() {
   if (overlayState.lightning || overlayState.rainStreaks.length > 0) return 8; // thunderstorm/rain
   if (overlayState.snowAccum) return 4;
-  if (overlayState.fogPlanes.length > 0) return 1.5;
+  if (overlayState.fogParticles.length > 0) return 1.5;
   return 1;
 }
 
@@ -715,7 +809,10 @@ function getWeatherErosionMultiplier() {
 function erodeRock(dtYears) {
   // Shrink the rock scale
   const erosion = baseErosionRate * getWeatherErosionMultiplier() * dtYears;
-  rock.scale.multiplyScalar(1 - erosion);
+  rock.scale.multiplyScalar(1 - erosion); // Apply erosion to current scale
+  // Note: Erosion only affects scale. It does not change the rock's base position or groundY directly.
+  // If scale changes significantly, the visual bottom of the rock might change relative to its origin.
+  // For true geometric erosion that affects position, the geometry itself would need to be modified.
   // Optionally, smooth the geometry (not implemented for performance)
 }
 
@@ -763,7 +860,54 @@ function animate() {
 function renderAR(timestamp, frame) {
   // If not in AR, run the normal animation/render logic
   if (!renderer.xr.isPresenting) {
-    // ... existing code for normal rendering ...
+    // Apply bounce physics if the rock is bouncing
+    if (isBouncing) {
+      velocity += gravity; // Apply gravity
+      rock.position.y += velocity; // Update position based on velocity
+
+      if (rock.position.y <= groundY) { // Check for collision with ground
+        rock.position.y = groundY; // Snap to ground
+        isBouncing = false;        // Stop bouncing
+        velocity = 0;              // Reset velocity
+      }
+    }
+    // Animate 3D rain particles
+    if (rainParticles) {
+      const positions = rainParticles.geometry.attributes.position.array;
+      for (let i = 0; i < positions.length; i += 3) {
+        positions[i + 1] -= 0.05; // Adjust speed as needed
+        if (positions[i + 1] < -1) { // Reset when below a certain y-level
+          positions[i + 1] = 2.5; // Reset to top
+        }
+      }
+      rainParticles.geometry.attributes.position.needsUpdate = true;
+    }
+
+    // Animate 3D snow particles
+    if (snowParticles) {
+      const positions = snowParticles.geometry.attributes.position.array;
+      for (let i = 0; i < positions.length; i += 3) {
+        positions[i + 1] -= 0.015; // Snow falls slower
+        // Add some horizontal drift for snow
+        positions[i] += (Math.random() - 0.5) * 0.005;
+        if (positions[i + 1] < -1) {
+          positions[i + 1] = 2.5;
+          positions[i] = (Math.random() - 0.5) * 2.5; // Reset x position too
+        }
+      }
+      snowParticles.geometry.attributes.position.needsUpdate = true;
+    }
+
+    // Time simulation
+    if (lastTime > 0) { // Ensure lastTime is initialized
+      const currentTime = timestamp;
+      const deltaTime = (currentTime - lastTime) / 1000; // Convert ms to seconds
+      simulatedYears += yearsPerSecond * deltaTime;
+      updateSimYearsDisplay();
+    }
+    lastTime = timestamp; // Update lastTime for the next frame
+
+    // ... any other existing code for normal rendering updates ...
     renderer.render(scene, camera);
     animateOverlay();
     return;
@@ -830,6 +974,7 @@ window.addEventListener('resize', () => {
 const WEATHER_API_KEY = '442d87fd0a3e5468f1f00457de3fee9e';
 
 function setWeatherVisuals(weatherOrString) {
+  console.log('[Weather] setWeatherVisuals called with:', weatherOrString);
   // Accept string for dev panel
   let main = null;
   if (typeof weatherOrString === 'string') {
@@ -848,31 +993,58 @@ function setWeatherVisuals(weatherOrString) {
   removeFog();
   stopThunder();
   if (main) {
+    console.log('[Weather] Processing main condition:', main);
     if (main.includes('cloud')) {
-      skyColor = '#a0b6c8';
+      skyColor = '#a0b6c8'; // Slightly darker blue for cloudy
+      groundColor = '#d3c5b0'; // Muted ground for cloudy
       ambientIntensity = 0.6;
       directionalIntensity = 0.5;
     } else if (main.includes('rain')) {
-      skyColor = '#7a8fa3';
-      ambientIntensity = 0.5;
-      directionalIntensity = 0.4;
-      addRain();
-    } else if (main.includes('snow')) {
-      skyColor = '#e6f7ff';
-      ambientIntensity = 0.8;
-      directionalIntensity = 0.6;
-      addSnow();
-    } else if (main.includes('thunder')) {
-      skyColor = '#5a6a7a';
+      skyColor = '#6c7883'; // Darker, more muted blue-grey
+      groundColor = '#788078'; // Darker, desaturated grey for wet ground
       ambientIntensity = 0.4;
       directionalIntensity = 0.3;
       addRain();
+    } else if (main.includes('snow')) {
+      skyColor = '#e8edf0'; // Very light, almost white, overcast grey-blue
+      groundColor = '#ffffff'; // Pure white for fresh snow
+      ambientIntensity = 0.75;
+      directionalIntensity = 0.55;
+      console.log('[Weather] Calling addSnow()');
+      addSnow();
+      console.log('[Weather] Attempting to add snow cap. Rock object:', rock);
+      if (rock) addSnowCap(rock);
+    } else if (main.includes('thunder')) {
+      skyColor = '#282c34'; // Very dark, near-black desaturated blue/grey, ominous
+      groundColor = '#4a4e58'; // Very dark grey, reflecting heavy shadow and wetness
+      ambientIntensity = 0.3;
+      directionalIntensity = 0.2;
+      addRain();
       triggerThunder();
     } else if (main.includes('mist') || main.includes('fog')) {
-      skyColor = '#cfd8dc';
-      ambientIntensity = 0.5;
-      directionalIntensity = 0.3;
-      addFog();
+      // For very dense fog, sky and ground colors should be very similar to the fog color itself
+      skyColor = '#ACAEB0'; // Very light, dense gray
+      groundColor = '#A5A7A9'; // Slightly darker dense gray
+      ambientIntensity = 0.3; // Reduced ambient light due to dense fog
+      directionalIntensity = 0.1; // Reduced directional light
+      if (scene.fog) {
+        scene.fog.color.set('#A8AAAC'); // Dense fog color, matching sky/ground
+        scene.fog.near = 0.5;    // Fog starts very close to camera
+        scene.fog.far = 12;   // Visibility limited to ~12 units (approx 20-30ft if 1 unit ~ 2ft)
+      } else {
+        scene.fog = new THREE.Fog('#A8AAAC', 0.5, 12);
+      }
+      fogEnabled = true;
+      removeRain();
+      removeSnow();
+      stopThunder();
+      // Old addFog() call and related logic removed as 3D fog is now handled directly here,
+      // and 2D fog planes are in updateOverlayForWeather/animateOverlay.
+    } else { // Default for 'clear' or unknown
+      skyColor = '#b7d3e6'; // Standard clear sky blue
+      groundColor = '#e0cda9'; // Standard ground color
+      ambientIntensity = 0.7;
+      directionalIntensity = 0.8;
     }
   }
   // Update background gradient
@@ -887,6 +1059,119 @@ function setWeatherVisuals(weatherOrString) {
 // Expose setWeather for dev panel
 window.setWeather = (weatherType) => setWeatherVisuals(weatherType);
 
+function updateOverlayForWeather(mainCondition) {
+  console.log('[Weather Overlay] Updating for condition:', mainCondition);
+
+  // Reset 2D overlay states
+  overlayState.rainStreaks = [];
+  overlayState.rainSplashes = [];
+  overlayState.sunPosition = null; // Reset sun position
+  overlayState.moonPosition = null; // Reset moon position
+  overlayState.fogParticles.length = 0; // Clear existing fog particles
+  overlayState.lightning = false;
+  overlayState.clouds = []; // Clear existing clouds
+  overlaySnowflakes.length = 0; // Clear 2D snowflakes by default
+
+  if (!mainCondition) return;
+
+  if (mainCondition.includes('rain') || mainCondition.includes('thunder')) {
+    // Add initial rain streaks for 2D overlay
+    for (let i = 0; i < 50; i++) { // Example: 50 streaks
+      overlayState.rainStreaks.push({
+        x: Math.random() * window.innerWidth,
+        y: Math.random() * window.innerHeight,
+        len: Math.random() * 20 + 10,
+        speed: Math.random() * 5 + 5
+      });
+    }
+    console.log('[Weather Overlay] Added 2D rain streaks.');
+  }
+
+  if (mainCondition.includes('thunder')) {
+    overlayState.lightning = true; // Enable lightning flashes in animateOverlay
+    console.log('[Weather Overlay] Enabled 2D lightning.');
+  }
+
+  if (mainCondition.includes('snow')) {
+    // For snow, 2D accumulation might be more complex or handled differently.
+    // For now, let's just log it. We can add 2D falling flakes later if desired.
+    overlayState.snowAccum = true; // Placeholder for potential 2D snow accumulation effect
+    console.log('[Weather Overlay] Set snow accumulation state (placeholder).');
+    // Add some 2D snowflakes
+    for (let i = 0; i < 100; i++) { // Example: 100 snowflakes
+      overlaySnowflakes.push({
+        x: Math.random() * window.innerWidth,
+        y: Math.random() * window.innerHeight,
+        r: Math.random() * 2 + 1, // radius
+        speed: Math.random() * 0.5 + 0.2, // fall speed
+        drift: (Math.random() - 0.5) * 0.5, // horizontal drift
+        phase: Math.random() * Math.PI * 2 // for sine wave drift
+      });
+    }
+    console.log('[Weather Overlay] Added 2D snowflakes to overlaySnowflakes array.');
+  }
+
+  if (mainCondition.includes('fog') || mainCondition.includes('mist')) {
+    // Add fog particles for a more natural look - Denser for heavy fog
+    const numFogParticles = 400; // Increased for density
+    for (let i = 0; i < numFogParticles; i++) {
+      const life = Math.random() * 250 + 150; // Slightly shorter lifetime for more churn
+      overlayState.fogParticles.push({
+        x: Math.random() * window.innerWidth,
+        y: window.innerHeight * (0.1 + Math.random() * 0.9) + (Math.random() * 20 + 30), // Spread more across the screen vertically
+        radius: Math.random() * 50 + 30, // Radius: 30px to 80px (larger particles)
+        initialAlpha: Math.random() * 0.15 + 0.05, // Max alpha: 0.05 to 0.20 (more opaque)
+        currentAlpha: 0,
+        speedX: (Math.random() - 0.5) * 0.2, // Even slower horizontal drift
+        speedY: (Math.random() - 0.5) * 0.05, // Even slower vertical drift
+        life: life,
+        maxLife: life,
+        phase: Math.random() * Math.PI * 2 // For subtle cyclical variations
+      });
+    }
+    console.log('[Weather Overlay] Added 2D fog particles.');
+  }
+  
+  if (mainCondition.includes('cloud')) {
+    // Add some clouds, ensuring they are at the top
+    const numClouds = Math.floor(Math.random() * 3) + 3; // 3-5 clouds
+    for (let i = 0; i < numClouds; i++) {
+      const cloudRadius = Math.random() * 20 + 40; // Radius 40-60px
+      overlayState.clouds.push({
+        x: Math.random() * window.innerWidth,
+        // Position clouds higher, ensuring they are fully visible given their radius
+        y: (window.innerHeight * (Math.random() * 0.05 + 0.02)) + cloudRadius, // Top 2-7% of screen + radius
+        r: cloudRadius, 
+        alpha: Math.random() * 0.3 + 0.5, // Opacity 0.5-0.8 (overall cloud alpha, gradient handles internal)
+
+        speed: (Math.random() * 0.5 + 0.2) * (Math.random() < 0.5 ? 1 : -1) // Speed 0.2-0.7, random direction
+      });
+    }
+    // Sort clouds by y then by r to give a slight parallax / layering if desired (optional)
+    overlayState.clouds.sort((a, b) => (a.y - a.r) - (b.y - b.r) || a.r - b.r);
+    console.log('[Weather Overlay] Added 2D clouds.');
+  }
+
+  if (mainCondition === 'Clear') {
+    if (isDayTime) {
+      overlayState.sunPosition = { x: 50, y: 50, r: 30 }; // Top-left
+      console.log('[Weather Overlay] Set sun position for clear day.');
+    } else { // Clear night
+      overlayState.moonPosition = { x: 50, y: 50, r: 25 }; // Top-left, moon radius 25
+      console.log('[Weather Overlay] Set moon position for clear night.');
+    }
+  }
+  // The following was part of the broken cloud/clear logic, ensure it's removed or correctly placed.
+  // If it was intended for clouds, it's now handled above.
+  // If it was for sun/moon, it's also handled above.
+  // r: 30
+    // Stray characters removed here
+    // Cloud logic handled above
+  // Clear sky logic (sun/moon) handled above
+
+  // Other conditions like 'clear' (if not day/night specific) will just have the reset (empty) overlayState.
+}
+
 function fetchWeatherAndSetScene(lat, lon) {
   fetch(`https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${WEATHER_API_KEY}`)
     .then(res => res.json())
@@ -898,6 +1183,9 @@ function fetchWeatherAndSetScene(lat, lon) {
       setWeatherVisuals(null); // fallback
     });
 }
+
+// Set initial weather to clear before attempting geolocation
+setWeatherVisuals('clear');
 
 if (navigator.geolocation) {
   navigator.geolocation.getCurrentPosition(
@@ -941,17 +1229,58 @@ const originalRockScale = new THREE.Vector3(1, 1, 1);
 const originalRockPosition = rock.position.clone();
 const originalRockGeometry = rockGeometry.clone();
 
-window.resetRock = function() {
-  // Reset scale
-  rock.scale.copy(originalRockScale);
-  // Reset geometry
-  rock.geometry.copy(originalRockGeometry);
-  // Reset position
-  rock.position.copy(originalRockPosition);
-  // Reset simulated years
-  simulatedYears = 0;
+function resetRock() {
+  console.log('Resetting rock to initial custom/default state...');
+  if (rock) {
+    scene.remove(rock);
+    if (rock.geometry) rock.geometry.dispose();
+    if (rock.material) {
+      // Assuming normalMap is shared and managed elsewhere or re-created if needed
+      // If normalMap was specific to this material instance and needs disposal:
+      // if (rock.material.normalMap) rock.material.normalMap.dispose();
+      rock.material.dispose();
+    }
+  }
+
+  // Use the stored initial parameters to regenerate the rock
+  customRockParams = JSON.parse(JSON.stringify(initialRockParams));
+  currentRockType = initialRockType;
+
+  rockGeometry = generateCustomRockGeometry(customRockParams, currentRockType);
+  
+  const preset = rockPresets[currentRockType] || rockPresets.granite;
+  // Re-use the global normalMap, assuming it's not parameter-dependent for reset
+  rockMaterial = new THREE.MeshStandardMaterial({
+    color: preset.color,
+    roughness: preset.roughness,
+    metalness: preset.metalness,
+    flatShading: false,
+    normalMap: normalMap, // Re-use existing global normalMap
+    normalScale: new THREE.Vector2(1.2, 1.2),
+  });
+
+  rock = new THREE.Mesh(rockGeometry, rockMaterial);
+  rock.castShadow = true;
+  rock.receiveShadow = true;
+  scene.add(rock);
+
+  // Re-place on ground
+  rock.updateMatrixWorld();
+  const boundingBox = new THREE.Box3().setFromObject(rock);
+  const groundLevel = ground.position.y;
+  rock.position.y = groundLevel - boundingBox.min.y;
+  groundY = rock.position.y; // Update groundY for physics after rock is placed
+
+  // Reset physics state
+  velocity = 0;
+  isBouncing = false;
+  simulatedYears = 0; // Reset erosion
   updateSimYearsDisplay();
-  // Reset snow cap
-  if (snowCap && scene.children.includes(snowCap)) removeSnowCap();
-  if (overlayState.snowAccum) addSnowCap();
-}; 
+  if (snowCap && scene.children.includes(snowCap)) scene.remove(snowCap); // Remove snow cap
+  
+  // Reset AR placement state if needed for consistency
+  arRockPlaced = false; 
+  if(arReticle) arReticle.visible = true; 
+
+  console.log('Rock reset to initial custom/default state.');
+};
