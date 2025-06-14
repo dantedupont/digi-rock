@@ -1,8 +1,10 @@
 import * as THREE from 'three';
-import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
+import { ARButton } from 'three/addons/webxr/ARButton.js';
+import { ARManager } from './ar.js';
 
 // Scene setup
 const scene = new THREE.Scene();
+console.log('Scene created');
 
 // Camera setup
 const camera = new THREE.PerspectiveCamera(
@@ -12,16 +14,20 @@ const camera = new THREE.PerspectiveCamera(
   1000
 );
 camera.position.z = 5;
+console.log('Camera created and positioned');
 
 // Renderer setup
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ 
+    antialias: true,
+    alpha: true // Enable transparency
+});
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.setClearColor(0x000000, 0); // Transparent background
 const canvas = renderer.domElement;
-// The CSS gradient will be visible behind the 3D scene
 document.getElementById('app').appendChild(renderer.domElement);
+console.log('Renderer created and canvas added to DOM');
 
 // Enable WebXR for AR
 renderer.xr.enabled = true;
@@ -125,13 +131,14 @@ ground.receiveShadow = true;
 
 // Position the rock so it sits on the bottom of the box
 rock.position.y = -((boxSize / 2) - 1 * 0.55); // 1 is the rock radius, 0.55 is the flattening factor
+let groundY = rock.position.y;
+const initialGroundY = rock.position.y; // Store original ground for non-AR
 
 // Physics variables for bouncing
 let velocity = 0;
 let isBouncing = false;
 const gravity = -0.025; // Gravity acceleration
 const bounceImpulse = 0.32; // Initial velocity when clicked
-const groundY = rock.position.y;
 
 let rainParticles = null;
 let snowParticles = null;
@@ -725,85 +732,124 @@ function updateSimYearsDisplay() {
   if (el) el.textContent = `Years: ${simulatedYears.toLocaleString(undefined, {maximumFractionDigits:0})}`;
 }
 
-// Helper for placing the rock in AR
-function onSelect() {
-  if (arReticle.visible && !arRockPlaced) {
-    rock.position.setFromMatrixPosition(arReticle.matrix);
-    rock.visible = true;
-    arRockPlaced = true;
-  }
-}
-
-// Reticle for AR placement
-const arReticleGeometry = new THREE.RingGeometry(0.12, 0.15, 32).rotateX(-Math.PI / 2);
-const arReticleMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-const arReticle = new THREE.Mesh(arReticleGeometry, arReticleMaterial);
-arReticle.matrixAutoUpdate = false;
-arReticle.visible = false;
-scene.add(arReticle);
-
-renderer.xr.addEventListener('sessionstart', () => {
-  arRockPlaced = false;
-  rock.visible = false;
-});
-
-renderer.xr.addEventListener('sessionend', () => {
-  arRockPlaced = false;
-  rock.visible = true;
-});
-
-// Add AR select event
-renderer.xr.getController(0).addEventListener('select', onSelect);
+// Initialize AR manager
+console.log('Creating AR Manager...');
+const arManager = new ARManager(scene, camera, renderer, rock);
+console.log('AR Manager created');
 
 // Replace the animate() function with AR support
 function animate() {
-  renderer.setAnimationLoop(renderAR);
+    console.log('Starting animation loop');
+    renderer.setAnimationLoop(renderAR);
 }
 
 function renderAR(timestamp, frame) {
-  // If not in AR, run the normal animation/render logic
-  if (!renderer.xr.isPresenting) {
-    // ... existing code for normal rendering ...
-    renderer.render(scene, camera);
-    animateOverlay();
-    return;
-  }
+    // Time simulation and erosion (works in both AR and non-AR)
+    const now = performance.now();
+    if (!renderAR.lastTime) renderAR.lastTime = now;
+    const dt = (now - renderAR.lastTime) / 1000;
+    renderAR.lastTime = now;
+    const dtYears = yearsPerSecond * dt;
+    simulatedYears += dtYears;
+    erodeRock(dtYears);
+    updateSimYearsDisplay();
 
-  // AR mode
-  const session = renderer.xr.getSession();
-  if (frame) {
-    const referenceSpace = renderer.xr.getReferenceSpace();
-    if (!hitTestSourceRequested) {
-      session.requestReferenceSpace('viewer').then((refSpace) => {
-        session.requestHitTestSource({ space: refSpace }).then((source) => {
-          hitTestSource = source;
-        });
-      });
-      session.addEventListener('end', () => {
-        hitTestSourceRequested = false;
-        hitTestSource = null;
-      });
-      hitTestSourceRequested = true;
+    // --- Bouncing physics (from original animate loop) ---
+    if (isBouncing) {
+        velocity += gravity;
+        rock.position.y += velocity;
+        if (rock.position.y <= groundY) {
+            // Snap to ground and stop bouncing
+            rock.position.y = groundY;
+            velocity = 0;
+            isBouncing = false;
+        }
     }
-    if (hitTestSource && !arRockPlaced) {
-      const hitTestResults = frame.getHitTestResults(hitTestSource);
-      if (hitTestResults.length > 0) {
-        const hit = hitTestResults[0];
-        arReticle.visible = true;
-        arReticle.matrix.fromArray(hit.getPose(renderer.xr.getReferenceSpace()).transform.matrix);
-      } else {
-        arReticle.visible = false;
-      }
+
+    // --- Overlay animation (weather, snow, etc.) ---
+    animateOverlay();
+
+    // Animate particles
+    updateParticles();
+
+    // Hide/show objects and overlays based on AR mode
+    if (arManager.isInARMode()) {
+        console.log('In AR mode');
+        // AR mode: only show the rock (keep lights for texture)
+        if (ground) ground.visible = false;
+        if (rainParticles) rainParticles.visible = false;
+        if (snowParticles) snowParticles.visible = false;
+        if (snowParticles2) snowParticles2.visible = false;
+        // Do NOT hide ambientLight or directionalLight in AR
+        overlay.style.display = 'none';
+        canvas.style.background = 'none';
+        renderer.setClearColor(0x000000, 0); // Transparent
     } else {
-      arReticle.visible = false;
+        console.log('In non-AR mode');
+        // Non-AR: restore visibility
+        if (ground) ground.visible = true;
+        if (rainParticles) rainParticles.visible = true;
+        if (snowParticles) snowParticles.visible = true;
+        if (snowParticles2) snowParticles2.visible = true;
+        if (ambientLight) ambientLight.visible = true;
+        if (directionalLight) directionalLight.visible = true;
+        overlay.style.display = '';
+        // The background will be set by setWeatherVisuals as usual
     }
-  }
-  renderer.render(scene, camera);
+
+    // Update AR
+    arManager.update(frame);
+
+    // Render the scene
+    renderer.render(scene, camera);
 }
 
+// Helper function to update particles
+function updateParticles() {
+    // Animate 3D rain particles
+    if (rainParticles) {
+        const positions = rainParticles.geometry.attributes.position;
+        for (let i = 0; i < positions.count; i++) {
+            positions.array[i * 3 + 1] -= 0.08 + Math.random() * 0.04; // y position
+            if (positions.array[i * 3 + 1] < 0) {
+                positions.array[i * 3 + 1] = 2.5;
+            }
+        }
+        positions.needsUpdate = true;
+    }
+
+    // Animate 3D snow particles (layer 1)
+    if (snowParticles) {
+        const positions = snowParticles.geometry.attributes.position;
+        for (let i = 0; i < positions.count; i++) {
+            positions.array[i * 3 + 1] -= 0.015 + Math.random() * 0.01; // y position
+            positions.array[i * 3] += (Math.random() - 0.5) * 0.01; // x drift
+            if (positions.array[i * 3 + 1] < 0) {
+                positions.array[i * 3 + 1] = 2.5;
+            }
+        }
+        positions.needsUpdate = true;
+    }
+
+    // Animate 3D snow particles (layer 2)
+    if (snowParticles2) {
+        const positions = snowParticles2.geometry.attributes.position;
+        for (let i = 0; i < positions.count; i++) {
+            positions.array[i * 3 + 1] -= 0.008 + Math.random() * 0.008; // y position
+            positions.array[i * 3] += (Math.random() - 0.5) * 0.008; // x drift
+            if (positions.array[i * 3 + 1] < 0) {
+                positions.array[i * 3 + 1] = 2.5;
+            }
+        }
+        positions.needsUpdate = true;
+    }
+}
+
+// Start the animation loop
+console.log('Starting application...');
 animate();
 
-// Click event for bouncing
+// Click event for bouncing (non-AR)
 renderer.domElement.addEventListener('pointerdown', (event) => {
   // Raycast to check if the rock was clicked
   const mouse = new THREE.Vector2(
@@ -814,6 +860,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   raycaster.setFromCamera(mouse, camera);
   const intersects = raycaster.intersectObject(rock);
   if (intersects.length > 0 && !isBouncing) {
+    groundY = initialGroundY; // Always use original ground in non-AR
     velocity = bounceImpulse;
     isBouncing = true;
   }
