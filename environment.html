@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Digi Rock - Three.js</title>
+    <style>
+      body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+      #app { width: 100vw; height: 100vh; }
+      #weather-controls {
+        position: fixed;
+        top: 70px;
+        right: 10px;
+        z-index: 10;
+        background: rgba(0, 0, 0, 0.1);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 15px;
+        padding: 15px; /* COMPACT: Reduced padding */
+        color: white;
+        min-width: 180px; /* COMPACT: Reduced min-width */
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      }
+      #weather-controls strong {
+        color: #e0e0e0;
+        display: block;
+        margin-bottom: 6px; /* COMPACT: Reduced margin */
+        text-shadow: 1px 1px 1px #000;
+      }
+      #weather-controls span#sim-years {
+        color: #e0e0e0;
+        display: block;
+        margin-bottom: 6px; /* COMPACT: Reduced margin */
+        text-shadow: 1px 1px 1px #000;
+      }
+      /* General span styling within weather-controls, if any other spans are added later and need default styling */
+      #weather-controls span:not(#sim-years) {
+        color: #e0e0e0;
+        display: block;
+        margin-bottom: 6px; /* COMPACT: Reduced margin */
+      }
+      #weather-controls hr {
+        border: none;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        margin: 10px 0; /* COMPACT: Reduced margin */
+      }
+      #weather-controls button {
+        padding: 6px 10px; /* COMPACT: Reduced padding */
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border: none;
+        border-radius: 8px;
+        color: white;
+        font-size: 11px; /* COMPACT: Reduced font size */
+        cursor: pointer;
+        transition: all 0.3s ease;
+        font-weight: 500;
+        margin: 4px 2px; /* COMPACT: Reduced margin */
+        display: inline-block;
+      }
+      #weather-controls button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+      }
+      #weather-controls button:active {
+        transform: translateY(0);
+      }
+      .weather-button-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 5px;
+        margin-bottom: 8px;
+      }
+      .weather-button-grid button {
+        width: 100%;
+        margin: 0; /* Override general button margin for grid items */
+      }
+      /* Style for the dev bar toggle button to also match */
+      #toggle-dev-bar {
+        background: linear-gradient(135deg, #ffb74d 0%, #ff9800 100%);
+        border: none;
+        padding: 6px 10px; /* COMPACT: Reduced padding */
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 11px; /* COMPACT: Reduced font size */
+        font-weight: bold;
+        color: white;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      }
+      #toggle-dev-bar:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(255, 152, 0, 0.4);
+      }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.128.0/build/three.module.js",
+          "three/examples/jsm/webxr/ARButton.js": "https://unpkg.com/three@0.128.0/examples/jsm/webxr/ARButton.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <canvas id="weather-overlay" style="position:absolute;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:5;"></canvas>
+    <span id="rockEnvironmentTitle" style="position: fixed; top: 10px; right: 10px; bottom: 5px; z-index: 20; color: white; font-weight: bold; font-size: 20px; text-shadow: 1px 1px 2px rgba(0,0,0,0.7);">Loading environment...</span>
+    <button id="toggle-dev-bar" style="position:fixed;top:35px;right:10px;z-index:20;">Hide Dev Bar</button>
+    <div id="weather-controls">
+      <strong>Weather Test:</strong>
+      <div class="weather-button-grid">
+        <button onclick="window.setWeather('clear')">Clear</button>
+        <button onclick="window.setWeather('clouds')">Cloudy</button>
+        <button onclick="window.setWeather('rain')">Rain</button>
+        <button onclick="window.setWeather('snow')">Snow</button>
+        <button onclick="window.setWeather('thunderstorm')">Thunderstorm</button>
+        <button onclick="window.setWeather('fog')">Fog</button>
+      </div>
+      <hr>
+      <strong>Time Simulation:</strong>
+      <span id="sim-years">Years: 0</span>
+      <button onclick="window.setTimeSpeed(1)">1 yr/sec</button>
+      <button onclick="window.setTimeSpeed(1000)">1k yrs/sec</button>
+      <button onclick="window.setTimeSpeed(1000000)">1M yrs/sec</button>
+      <button onclick="window.setTimeSpeed(10000000)">10M yrs/sec</button>
+      <br>
+      <button onclick="window.resetRock()">Reset Rock</button>
+      <!-- Toggle Day/Night button removed -->
+    </div>
+    <script type="module" src="/main.js"></script>
+    <script>
+      const devBar = document.getElementById('weather-controls');
+      const toggleBtn = document.getElementById('toggle-dev-bar');
+      let devBarVisible = true;
+      toggleBtn.onclick = () => {
+        devBarVisible = !devBarVisible;
+        devBar.style.display = devBarVisible ? '' : 'none';
+        toggleBtn.textContent = devBarVisible ? 'Hide Dev Bar' : 'Show Dev Bar';
+      };
+    </script>
+  </body>
+</html>

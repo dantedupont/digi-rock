@@ -315,6 +315,29 @@ function setupControls() {
         });
     }
     
+    // Finalize Rock button
+    const finalizeBtn = document.getElementById('finalizeRock');
+    if (finalizeBtn) {
+        finalizeBtn.addEventListener('click', () => {
+            console.log('Finalizing rock and saving to localStorage...');
+            try {
+                const rockNameInput = document.getElementById('rockName');
+                const rockName = rockNameInput ? rockNameInput.value.trim() : 'My Rock';
+                localStorage.setItem('rockName', rockName || 'My Rock');
+                localStorage.setItem('customRockParams', JSON.stringify(rockParams));
+                localStorage.setItem('customRockType', currentRockType);
+                console.log('Rock name saved:', rockName);
+                console.log('Rock parameters saved:', rockParams);
+                console.log('Rock type saved:', currentRockType);
+                // Redirect to the main scene page (assuming it's index.html in the parent directory)
+                window.location.href = 'environment.html'; 
+            } catch (error) {
+                console.error('Error saving to localStorage:', error);
+                alert('Could not save rock settings. Please ensure localStorage is enabled and not full.');
+            }
+        });
+    }
+
     console.log('Controls setup complete!');
 }
 
