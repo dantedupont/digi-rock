@@ -1,8 +1,11 @@
 import * as THREE from 'three';
-import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
+import { ARButton } from 'three/addons/webxr/ARButton.js';
+import { ARManager } from './ar.js';
+import { AnimationManager } from './animations.js';
 
 // Scene setup
 const scene = new THREE.Scene();
+
 let rainParticles = null; // For 3D rain effect
 let snowParticles = null; // For 3D snow effect
 
@@ -23,6 +26,7 @@ let overlayState = {
 };
 let rock; // Declare the main rock object
 
+
 // Camera setup
 const camera = new THREE.PerspectiveCamera(
   75,
@@ -30,17 +34,22 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   1000
 );
+
 camera.position.z = 10;
 
+
 // Renderer setup
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ 
+    antialias: true,
+    alpha: true // Enable transparency
+});
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.setClearColor(0x000000, 0); // Transparent background
 const canvas = renderer.domElement;
-// The CSS gradient will be visible behind the 3D scene
 document.getElementById('app').appendChild(renderer.domElement);
+console.log('Renderer created and canvas added to DOM');
 
 // Overlay canvas for 2D weather effects
 const overlay = document.getElementById('weather-overlay');
@@ -69,8 +78,10 @@ let arRockPlaced = false;
 
 // Lighting
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+ambientLight.name = 'ambientLight';
 scene.add(ambientLight);
 const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+directionalLight.name = 'directionalLight';
 directionalLight.position.set(5, 10, 7.5);
 directionalLight.castShadow = true;
 directionalLight.shadow.mapSize.width = 2048;
@@ -331,6 +342,7 @@ ground.position.y = -boxSize / 2 + 0.01; // Slightly above the box bottom
 scene.add(ground);
 ground.receiveShadow = true;
 
+
 // Physics variables for bounce
 let groundY = 0; // Will be set dynamically AFTER rock is positioned
 // Position the rock so it sits on the ground plane
@@ -353,10 +365,13 @@ if (isNaN(rock.position.y) || !isFinite(rock.position.y)) {
 }
 groundY = rock.position.y; // Set groundY for physics
 
+
 let velocity = 0;
 let isBouncing = false;
+
 const gravity = -0.025; // Adjusted for a slightly more pronounced effect
 const bounceImpulse = 0.45; // Adjusted for a slightly more pronounced effect
+
 
 // Animate overlays
 function animateOverlay() {
@@ -785,40 +800,21 @@ function updateSimYearsDisplay() {
   if (el) el.textContent = `Years: ${simulatedYears.toLocaleString(undefined, {maximumFractionDigits:0})}`;
 }
 
-// Helper for placing the rock in AR
-function onSelect() {
-  if (arReticle.visible && !arRockPlaced) {
-    rock.position.setFromMatrixPosition(arReticle.matrix);
-    rock.visible = true;
-    arRockPlaced = true;
-  }
-}
+// Initialize managers
+console.log('Creating AR Manager...');
+const arManager = new ARManager(scene, camera, renderer, rock);
+console.log('AR Manager created');
 
-// Reticle for AR placement
-const arReticleGeometry = new THREE.RingGeometry(0.12, 0.15, 32).rotateX(-Math.PI / 2);
-const arReticleMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-const arReticle = new THREE.Mesh(arReticleGeometry, arReticleMaterial);
-arReticle.matrixAutoUpdate = false;
-arReticle.visible = false;
-scene.add(arReticle);
+console.log('Creating Animation Manager...');
+const animationManager = new AnimationManager(scene, rock, overlay);
+console.log('Animation Manager created');
 
-renderer.xr.addEventListener('sessionstart', () => {
-  arRockPlaced = false;
-  rock.visible = false;
-});
-
-renderer.xr.addEventListener('sessionend', () => {
-  arRockPlaced = false;
-  rock.visible = true;
-});
-
-// Add AR select event
-renderer.xr.getController(0).addEventListener('select', onSelect);
-
-// Replace the animate() function with AR support
+// Animation loop
 function animate() {
-  renderer.setAnimationLoop(renderAR);
+    console.log('Starting animation loop');
+    renderer.setAnimationLoop(render);
 }
+
 
 function renderAR(timestamp, frame) {
   // If not in AR, run the normal animation/render logic
@@ -871,70 +867,26 @@ function renderAR(timestamp, frame) {
     lastTime = timestamp; // Update lastTime for the next frame
 
     // ... any other existing code for normal rendering updates ...
-    renderer.render(scene, camera);
-    animateOverlay();
-    return;
-  }
 
-  // AR mode
-  const session = renderer.xr.getSession();
-  if (frame) {
-    const referenceSpace = renderer.xr.getReferenceSpace();
-    if (!hitTestSourceRequested) {
-      session.requestReferenceSpace('viewer').then((refSpace) => {
-        session.requestHitTestSource({ space: refSpace }).then((source) => {
-          hitTestSource = source;
-        });
-      });
-      session.addEventListener('end', () => {
-        hitTestSourceRequested = false;
-        hitTestSource = null;
-      });
-      hitTestSourceRequested = true;
-    }
-    if (hitTestSource && !arRockPlaced) {
-      const hitTestResults = frame.getHitTestResults(hitTestSource);
-      if (hitTestResults.length > 0) {
-        const hit = hitTestResults[0];
-        arReticle.visible = true;
-        arReticle.matrix.fromArray(hit.getPose(renderer.xr.getReferenceSpace()).transform.matrix);
-      } else {
-        arReticle.visible = false;
-      }
-    } else {
-      arReticle.visible = false;
-    }
-  }
-  renderer.render(scene, camera);
+    renderer.render(scene, camera);
 }
 
+// Start the animation loop
+console.log('Starting application...');
 animate();
 
-// Click event for bouncing
-renderer.domElement.addEventListener('pointerdown', (event) => {
-  // Raycast to check if the rock was clicked
-  const mouse = new THREE.Vector2(
-    (event.clientX / renderer.domElement.clientWidth) * 2 - 1,
-    -(event.clientY / renderer.domElement.clientHeight) * 2 + 1
-  );
-  const raycaster = new THREE.Raycaster();
-  raycaster.setFromCamera(mouse, camera);
-  const intersects = raycaster.intersectObject(rock);
-  if (intersects.length > 0 && !isBouncing) {
-    velocity = bounceImpulse;
-    isBouncing = true;
-  }
-});
-
-// Responsive resize
+// Handle window resize
 window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    overlay.width = window.innerWidth;
+    overlay.height = window.innerHeight;
 });
 
 // Weather API integration
 const WEATHER_API_KEY = '442d87fd0a3e5468f1f00457de3fee9e';
+
 
 function setWeatherVisuals(weatherOrString) {
   console.log('[Weather] setWeatherVisuals called with:', weatherOrString);
@@ -1132,35 +1084,39 @@ function updateOverlayForWeather(mainCondition) {
   // Other conditions like 'clear' (if not day/night specific) will just have the reset (empty) overlayState.
 }
 
+
 function fetchWeatherAndSetScene(lat, lon) {
-  fetch(`https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${WEATHER_API_KEY}`)
-    .then(res => res.json())
-    .then(data => {
-      setWeatherVisuals(data);
-    })
-    .catch(err => {
-      console.error('Weather fetch error:', err);
-      setWeatherVisuals(null); // fallback
-    });
+    fetch(`https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${WEATHER_API_KEY}`)
+        .then(res => res.json())
+        .then(data => {
+            animationManager.setWeatherVisuals(data);
+        })
+        .catch(err => {
+            console.error('Weather fetch error:', err);
+            animationManager.setWeatherVisuals(null);
+        });
 }
 
 // Set initial weather to clear before attempting geolocation
 setWeatherVisuals('clear');
 
 if (navigator.geolocation) {
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      const { latitude, longitude } = pos.coords;
-      fetchWeatherAndSetScene(latitude, longitude);
-    },
-    (err) => {
-      console.warn('Geolocation error:', err);
-      setWeatherVisuals(null); // fallback
-    }
-  );
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            const { latitude, longitude } = pos.coords;
+            fetchWeatherAndSetScene(latitude, longitude);
+        },
+        (err) => {
+            console.warn('Geolocation error:', err);
+            animationManager.setWeatherVisuals(null);
+        }
+    );
 } else {
-  setWeatherVisuals(null); // fallback
+    animationManager.setWeatherVisuals(null);
 }
+
+// Expose setWeather for dev panel
+window.setWeather = (weatherType) => animationManager.setWeatherVisuals(weatherType);
 
 // Procedural snowflake texture for particles
 function createSnowflakeTexture() {
