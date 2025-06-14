@@ -1047,9 +1047,8 @@ function setWeatherVisuals(weatherOrString) {
       directionalIntensity = 0.8;
     }
   }
-  // Update background gradient
-  const canvas = renderer.domElement;
-  canvas.style.background = `linear-gradient(to top, ${groundColor} 0%, ${skyColor} 100%)`;
+  // Update scene background color
+  scene.background = new THREE.Color(skyColor);
   // Update lighting
   ambientLight.intensity = ambientIntensity;
   directionalLight.intensity = directionalIntensity;
