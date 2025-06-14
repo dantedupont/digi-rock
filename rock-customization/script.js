@@ -326,7 +326,7 @@ function setupControls() {
                 console.log('Rock parameters saved:', rockParams);
                 console.log('Rock type saved:', currentRockType);
                 // Redirect to the main scene page (assuming it's index.html in the parent directory)
-                window.location.href = '../index.html'; 
+                window.location.href = 'environment.html'; 
             } catch (error) {
                 console.error('Error saving to localStorage:', error);
                 alert('Could not save rock settings. Please ensure localStorage is enabled and not full.');
