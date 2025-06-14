@@ -125,13 +125,14 @@ ground.receiveShadow = true;
 
 // Position the rock so it sits on the bottom of the box
 rock.position.y = -((boxSize / 2) - 1 * 0.55); // 1 is the rock radius, 0.55 is the flattening factor
+let groundY = rock.position.y;
+const initialGroundY = rock.position.y; // Store original ground for non-AR
 
 // Physics variables for bouncing
 let velocity = 0;
 let isBouncing = false;
 const gravity = -0.025; // Gravity acceleration
 const bounceImpulse = 0.32; // Initial velocity when clicked
-const groundY = rock.position.y;
 
 let rainParticles = null;
 let snowParticles = null;
@@ -728,9 +729,24 @@ function updateSimYearsDisplay() {
 // Helper for placing the rock in AR
 function onSelect() {
   if (arReticle.visible && !arRockPlaced) {
-    rock.position.setFromMatrixPosition(arReticle.matrix);
+    // Place the rock as before
+    rock.scale.set(0.15, 0.15, 0.15);
+    const reticlePosition = new THREE.Vector3();
+    reticlePosition.setFromMatrixPosition(arReticle.matrix);
+    const cameraDirection = new THREE.Vector3();
+    camera.getWorldDirection(cameraDirection);
+    cameraDirection.y = 0;
+    cameraDirection.normalize();
+    // Offset position by 1.7 meters (about 1 foot closer than before)
+    reticlePosition.copy(camera.position).add(cameraDirection.multiplyScalar(1.7));
+    rock.position.copy(reticlePosition);
     rock.visible = true;
     arRockPlaced = true;
+  } else if (arRockPlaced && rock.visible) {
+    // In AR, set the groundY to the current y-position of the rock
+    groundY = rock.position.y;
+    velocity = bounceImpulse;
+    isBouncing = true;
   }
 }
 
@@ -761,11 +777,96 @@ function animate() {
 }
 
 function renderAR(timestamp, frame) {
+  // Time simulation and erosion (works in both AR and non-AR)
+  const now = performance.now();
+  if (!renderAR.lastTime) renderAR.lastTime = now;
+  const dt = (now - renderAR.lastTime) / 1000;
+  renderAR.lastTime = now;
+  const dtYears = yearsPerSecond * dt;
+  simulatedYears += dtYears;
+  erodeRock(dtYears);
+  updateSimYearsDisplay();
+
+  // --- Bouncing physics (from original animate loop) ---
+  if (isBouncing) {
+    velocity += gravity;
+    rock.position.y += velocity;
+    if (rock.position.y <= groundY) {
+      // Snap to ground and stop bouncing
+      rock.position.y = groundY;
+      velocity = 0;
+      isBouncing = false;
+    }
+  }
+
+  // --- Overlay animation (weather, snow, etc.) ---
+  animateOverlay();
+
+  // Animate 3D rain particles
+  if (rainParticles) {
+    const positions = rainParticles.geometry.attributes.position;
+    for (let i = 0; i < positions.count; i++) {
+      positions.array[i * 3 + 1] -= 0.08 + Math.random() * 0.04; // y position
+      if (positions.array[i * 3 + 1] < 0) {
+        positions.array[i * 3 + 1] = 2.5;
+      }
+    }
+    positions.needsUpdate = true;
+  }
+
+  // Animate 3D snow particles (layer 1)
+  if (snowParticles) {
+    const positions = snowParticles.geometry.attributes.position;
+    for (let i = 0; i < positions.count; i++) {
+      positions.array[i * 3 + 1] -= 0.015 + Math.random() * 0.01; // y position
+      positions.array[i * 3] += (Math.random() - 0.5) * 0.01; // x drift
+      if (positions.array[i * 3 + 1] < 0) {
+        positions.array[i * 3 + 1] = 2.5;
+      }
+    }
+    positions.needsUpdate = true;
+  }
+
+  // Animate 3D snow particles (layer 2)
+  if (snowParticles2) {
+    const positions = snowParticles2.geometry.attributes.position;
+    for (let i = 0; i < positions.count; i++) {
+      positions.array[i * 3 + 1] -= 0.008 + Math.random() * 0.008; // y position
+      positions.array[i * 3] += (Math.random() - 0.5) * 0.008; // x drift
+      if (positions.array[i * 3 + 1] < 0) {
+        positions.array[i * 3 + 1] = 2.5;
+      }
+    }
+    positions.needsUpdate = true;
+  }
+
+  // Hide/show objects and overlays based on AR mode
+  if (renderer.xr.isPresenting) {
+    // AR mode: only show the rock (keep lights for texture)
+    if (ground) ground.visible = false;
+    if (rainParticles) rainParticles.visible = false;
+    if (snowParticles) snowParticles.visible = false;
+    if (snowParticles2) snowParticles2.visible = false;
+    if (arReticle) arReticle.visible = false;
+    // Do NOT hide ambientLight or directionalLight in AR
+    overlay.style.display = 'none';
+    canvas.style.background = 'none';
+    renderer.setClearColor(0x000000, 0); // Transparent
+  } else {
+    // Non-AR: restore visibility
+    if (ground) ground.visible = true;
+    if (rainParticles) rainParticles.visible = true;
+    if (snowParticles) snowParticles.visible = true;
+    if (snowParticles2) snowParticles2.visible = true;
+    if (ambientLight) ambientLight.visible = true;
+    if (directionalLight) directionalLight.visible = true;
+    overlay.style.display = '';
+    // The background will be set by setWeatherVisuals as usual
+  }
+
   // If not in AR, run the normal animation/render logic
   if (!renderer.xr.isPresenting) {
-    // ... existing code for normal rendering ...
     renderer.render(scene, camera);
-    animateOverlay();
     return;
   }
 
@@ -803,7 +904,7 @@ function renderAR(timestamp, frame) {
 
 animate();
 
-// Click event for bouncing
+// Click event for bouncing (non-AR)
 renderer.domElement.addEventListener('pointerdown', (event) => {
   // Raycast to check if the rock was clicked
   const mouse = new THREE.Vector2(
@@ -814,6 +915,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   raycaster.setFromCamera(mouse, camera);
   const intersects = raycaster.intersectObject(rock);
   if (intersects.length > 0 && !isBouncing) {
+    groundY = initialGroundY; // Always use original ground in non-AR
     velocity = bounceImpulse;
     isBouncing = true;
   }
