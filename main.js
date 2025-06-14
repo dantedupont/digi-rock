@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { ARManager } from './ar.js';
+import { AnimationManager } from './animations.js';
 
 // Scene setup
 const scene = new THREE.Scene();
@@ -43,8 +44,10 @@ let arRockPlaced = false;
 
 // Lighting
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+ambientLight.name = 'ambientLight';
 scene.add(ambientLight);
 const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+directionalLight.name = 'directionalLight';
 directionalLight.position.set(5, 10, 7.5);
 directionalLight.castShadow = true;
 directionalLight.shadow.mapSize.width = 1024;
@@ -732,70 +735,29 @@ function updateSimYearsDisplay() {
   if (el) el.textContent = `Years: ${simulatedYears.toLocaleString(undefined, {maximumFractionDigits:0})}`;
 }
 
-// Initialize AR manager
+// Initialize managers
 console.log('Creating AR Manager...');
 const arManager = new ARManager(scene, camera, renderer, rock);
 console.log('AR Manager created');
 
-// Replace the animate() function with AR support
+console.log('Creating Animation Manager...');
+const animationManager = new AnimationManager(scene, rock, overlay);
+console.log('Animation Manager created');
+
+// Animation loop
 function animate() {
     console.log('Starting animation loop');
-    renderer.setAnimationLoop(renderAR);
+    renderer.setAnimationLoop(render);
 }
 
-function renderAR(timestamp, frame) {
-    // Time simulation and erosion (works in both AR and non-AR)
+function render(timestamp, frame) {
+    // Update animations
     const now = performance.now();
-    if (!renderAR.lastTime) renderAR.lastTime = now;
-    const dt = (now - renderAR.lastTime) / 1000;
-    renderAR.lastTime = now;
-    const dtYears = yearsPerSecond * dt;
-    simulatedYears += dtYears;
-    erodeRock(dtYears);
-    updateSimYearsDisplay();
-
-    // --- Bouncing physics (from original animate loop) ---
-    if (isBouncing) {
-        velocity += gravity;
-        rock.position.y += velocity;
-        if (rock.position.y <= groundY) {
-            // Snap to ground and stop bouncing
-            rock.position.y = groundY;
-            velocity = 0;
-            isBouncing = false;
-        }
-    }
-
-    // --- Overlay animation (weather, snow, etc.) ---
-    animateOverlay();
-
-    // Animate particles
-    updateParticles();
-
-    // Hide/show objects and overlays based on AR mode
-    if (arManager.isInARMode()) {
-        console.log('In AR mode');
-        // AR mode: only show the rock (keep lights for texture)
-        if (ground) ground.visible = false;
-        if (rainParticles) rainParticles.visible = false;
-        if (snowParticles) snowParticles.visible = false;
-        if (snowParticles2) snowParticles2.visible = false;
-        // Do NOT hide ambientLight or directionalLight in AR
-        overlay.style.display = 'none';
-        canvas.style.background = 'none';
-        renderer.setClearColor(0x000000, 0); // Transparent
-    } else {
-        console.log('In non-AR mode');
-        // Non-AR: restore visibility
-        if (ground) ground.visible = true;
-        if (rainParticles) rainParticles.visible = true;
-        if (snowParticles) snowParticles.visible = true;
-        if (snowParticles2) snowParticles2.visible = true;
-        if (ambientLight) ambientLight.visible = true;
-        if (directionalLight) directionalLight.visible = true;
-        overlay.style.display = '';
-        // The background will be set by setWeatherVisuals as usual
-    }
+    if (!render.lastTime) render.lastTime = now;
+    const dt = (now - render.lastTime) / 1000;
+    render.lastTime = now;
+    
+    animationManager.update(dt);
 
     // Update AR
     arManager.update(frame);
@@ -804,162 +766,51 @@ function renderAR(timestamp, frame) {
     renderer.render(scene, camera);
 }
 
-// Helper function to update particles
-function updateParticles() {
-    // Animate 3D rain particles
-    if (rainParticles) {
-        const positions = rainParticles.geometry.attributes.position;
-        for (let i = 0; i < positions.count; i++) {
-            positions.array[i * 3 + 1] -= 0.08 + Math.random() * 0.04; // y position
-            if (positions.array[i * 3 + 1] < 0) {
-                positions.array[i * 3 + 1] = 2.5;
-            }
-        }
-        positions.needsUpdate = true;
-    }
-
-    // Animate 3D snow particles (layer 1)
-    if (snowParticles) {
-        const positions = snowParticles.geometry.attributes.position;
-        for (let i = 0; i < positions.count; i++) {
-            positions.array[i * 3 + 1] -= 0.015 + Math.random() * 0.01; // y position
-            positions.array[i * 3] += (Math.random() - 0.5) * 0.01; // x drift
-            if (positions.array[i * 3 + 1] < 0) {
-                positions.array[i * 3 + 1] = 2.5;
-            }
-        }
-        positions.needsUpdate = true;
-    }
-
-    // Animate 3D snow particles (layer 2)
-    if (snowParticles2) {
-        const positions = snowParticles2.geometry.attributes.position;
-        for (let i = 0; i < positions.count; i++) {
-            positions.array[i * 3 + 1] -= 0.008 + Math.random() * 0.008; // y position
-            positions.array[i * 3] += (Math.random() - 0.5) * 0.008; // x drift
-            if (positions.array[i * 3 + 1] < 0) {
-                positions.array[i * 3 + 1] = 2.5;
-            }
-        }
-        positions.needsUpdate = true;
-    }
-}
-
 // Start the animation loop
 console.log('Starting application...');
 animate();
 
-// Click event for bouncing (non-AR)
-renderer.domElement.addEventListener('pointerdown', (event) => {
-  // Raycast to check if the rock was clicked
-  const mouse = new THREE.Vector2(
-    (event.clientX / renderer.domElement.clientWidth) * 2 - 1,
-    -(event.clientY / renderer.domElement.clientHeight) * 2 + 1
-  );
-  const raycaster = new THREE.Raycaster();
-  raycaster.setFromCamera(mouse, camera);
-  const intersects = raycaster.intersectObject(rock);
-  if (intersects.length > 0 && !isBouncing) {
-    groundY = initialGroundY; // Always use original ground in non-AR
-    velocity = bounceImpulse;
-    isBouncing = true;
-  }
-});
-
-// Responsive resize
+// Handle window resize
 window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    overlay.width = window.innerWidth;
+    overlay.height = window.innerHeight;
 });
 
 // Weather API integration
 const WEATHER_API_KEY = '442d87fd0a3e5468f1f00457de3fee9e';
 
-function setWeatherVisuals(weatherOrString) {
-  // Accept string for dev panel
-  let main = null;
-  if (typeof weatherOrString === 'string') {
-    main = weatherOrString;
-    weatherOrString = { weather: [{ main }] };
-  } else if (weatherOrString) {
-    main = weatherOrString.weather[0].main.toLowerCase();
-  }
-  // Default: clear sky
-  let skyColor = '#b7d3e6';
-  let groundColor = '#e0cda9';
-  let ambientIntensity = 0.7;
-  let directionalIntensity = 0.8;
-  removeRain();
-  removeSnow();
-  removeFog();
-  stopThunder();
-  if (main) {
-    if (main.includes('cloud')) {
-      skyColor = '#a0b6c8';
-      ambientIntensity = 0.6;
-      directionalIntensity = 0.5;
-    } else if (main.includes('rain')) {
-      skyColor = '#7a8fa3';
-      ambientIntensity = 0.5;
-      directionalIntensity = 0.4;
-      addRain();
-    } else if (main.includes('snow')) {
-      skyColor = '#e6f7ff';
-      ambientIntensity = 0.8;
-      directionalIntensity = 0.6;
-      addSnow();
-    } else if (main.includes('thunder')) {
-      skyColor = '#5a6a7a';
-      ambientIntensity = 0.4;
-      directionalIntensity = 0.3;
-      addRain();
-      triggerThunder();
-    } else if (main.includes('mist') || main.includes('fog')) {
-      skyColor = '#cfd8dc';
-      ambientIntensity = 0.5;
-      directionalIntensity = 0.3;
-      addFog();
-    }
-  }
-  // Update background gradient
-  const canvas = renderer.domElement;
-  canvas.style.background = `linear-gradient(to top, ${groundColor} 0%, ${skyColor} 100%)`;
-  // Update lighting
-  ambientLight.intensity = ambientIntensity;
-  directionalLight.intensity = directionalIntensity;
-  updateOverlayForWeather(main);
-}
-
-// Expose setWeather for dev panel
-window.setWeather = (weatherType) => setWeatherVisuals(weatherType);
-
 function fetchWeatherAndSetScene(lat, lon) {
-  fetch(`https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${WEATHER_API_KEY}`)
-    .then(res => res.json())
-    .then(data => {
-      setWeatherVisuals(data);
-    })
-    .catch(err => {
-      console.error('Weather fetch error:', err);
-      setWeatherVisuals(null); // fallback
-    });
+    fetch(`https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${WEATHER_API_KEY}`)
+        .then(res => res.json())
+        .then(data => {
+            animationManager.setWeatherVisuals(data);
+        })
+        .catch(err => {
+            console.error('Weather fetch error:', err);
+            animationManager.setWeatherVisuals(null);
+        });
 }
 
 if (navigator.geolocation) {
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      const { latitude, longitude } = pos.coords;
-      fetchWeatherAndSetScene(latitude, longitude);
-    },
-    (err) => {
-      console.warn('Geolocation error:', err);
-      setWeatherVisuals(null); // fallback
-    }
-  );
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            const { latitude, longitude } = pos.coords;
+            fetchWeatherAndSetScene(latitude, longitude);
+        },
+        (err) => {
+            console.warn('Geolocation error:', err);
+            animationManager.setWeatherVisuals(null);
+        }
+    );
 } else {
-  setWeatherVisuals(null); // fallback
+    animationManager.setWeatherVisuals(null);
 }
+
+// Expose setWeather for dev panel
+window.setWeather = (weatherType) => animationManager.setWeatherVisuals(weatherType);
 
 // Procedural snowflake texture for particles
 function createSnowflakeTexture() {
