@@ -170,13 +170,26 @@ function loadCustomRockData() {
             customRockParams = JSON.parse(paramsString);
             currentRockType = typeString;
             console.log('Loaded custom rock from localStorage:', customRockParams, currentRockType);
-        } else {
+        }
+
+        const rockName = localStorage.getItem('rockName') || 'My Rock';
+        const rockEnvironmentTitleElement = document.getElementById('rockEnvironmentTitle');
+        if (rockEnvironmentTitleElement) {
+            rockEnvironmentTitleElement.textContent = `${rockName}'s environment`;
+        }
+        console.log('Loaded rock name for title:', rockName);
+        
+        if (!paramsString || !typeString) { // Adjusted the 'else' condition to only log if data was truly missing
             console.log('No custom rock data in localStorage, using defaults.');
             // Defaults are already set globally
         }
     } catch (error) {
         console.error('Error loading rock data from localStorage:', error);
         // Defaults are already set, so we can proceed
+        const rockEnvironmentTitleElement = document.getElementById('rockEnvironmentTitle');
+        if (rockEnvironmentTitleElement) {
+            rockEnvironmentTitleElement.textContent = "My Rock's environment";
+        }
     }
 }
 

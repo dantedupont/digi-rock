@@ -321,8 +321,12 @@ function setupControls() {
         finalizeBtn.addEventListener('click', () => {
             console.log('Finalizing rock and saving to localStorage...');
             try {
+                const rockNameInput = document.getElementById('rockName');
+                const rockName = rockNameInput ? rockNameInput.value.trim() : 'My Rock';
+                localStorage.setItem('rockName', rockName || 'My Rock');
                 localStorage.setItem('customRockParams', JSON.stringify(rockParams));
                 localStorage.setItem('customRockType', currentRockType);
+                console.log('Rock name saved:', rockName);
                 console.log('Rock parameters saved:', rockParams);
                 console.log('Rock type saved:', currentRockType);
                 // Redirect to the main scene page (assuming it's index.html in the parent directory)

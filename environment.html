@@ -9,7 +9,7 @@
       #app { width: 100vw; height: 100vh; }
       #weather-controls {
         position: fixed;
-        top: 50px;
+        top: 70px;
         right: 10px;
         z-index: 10;
         background: rgba(0, 0, 0, 0.1);
@@ -21,8 +21,20 @@
         min-width: 180px; /* COMPACT: Reduced min-width */
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
       }
-      #weather-controls strong,
-      #weather-controls span {
+      #weather-controls strong {
+        color: #e0e0e0;
+        display: block;
+        margin-bottom: 6px; /* COMPACT: Reduced margin */
+        text-shadow: 1px 1px 1px #000;
+      }
+      #weather-controls span#sim-years {
+        color: #e0e0e0;
+        display: block;
+        margin-bottom: 6px; /* COMPACT: Reduced margin */
+        text-shadow: 1px 1px 1px #000;
+      }
+      /* General span styling within weather-controls, if any other spans are added later and need default styling */
+      #weather-controls span:not(#sim-years) {
         color: #e0e0e0;
         display: block;
         margin-bottom: 6px; /* COMPACT: Reduced margin */
@@ -92,7 +104,8 @@
   <body>
     <div id="app"></div>
     <canvas id="weather-overlay" style="position:absolute;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:5;"></canvas>
-    <button id="toggle-dev-bar" style="position:fixed;top:10px;right:10px;z-index:20;">Hide Dev Bar</button>
+    <span id="rockEnvironmentTitle" style="position: fixed; top: 10px; right: 10px; bottom: 5px; z-index: 20; color: white; font-weight: bold; font-size: 20px; text-shadow: 1px 1px 2px rgba(0,0,0,0.7);">Loading environment...</span>
+    <button id="toggle-dev-bar" style="position:fixed;top:35px;right:10px;z-index:20;">Hide Dev Bar</button>
     <div id="weather-controls">
       <strong>Weather Test:</strong>
       <div class="weather-button-grid">
