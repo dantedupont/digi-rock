@@ -22,6 +22,8 @@ let overlayState = {
   moonPosition: null // { x, y, r } for drawing the moon
 };
 let rock; // Declare the main rock object
+let arRockPlaced = false; // Variable to track if the rock has been placed in AR
+let arOriginalRockMaterial = null; // To store material before AR
 
 // Camera setup
 const camera = new THREE.PerspectiveCamera(
@@ -41,6 +43,7 @@ renderer.setClearColor(0x000000, 0); // Transparent background
 const canvas = renderer.domElement;
 // The CSS gradient will be visible behind the 3D scene
 document.getElementById('app').appendChild(renderer.domElement);
+renderer.xr.enabled = true;
 
 // Overlay canvas for 2D weather effects
 const overlay = document.getElementById('weather-overlay');
@@ -60,12 +63,14 @@ renderer.xr.enabled = true;
 // Add ARButton to the DOM
 const arButton = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
 document.body.appendChild(arButton);
+// Ensure the main animation loop is set up initially for non-AR rendering
+// ARButton will take over the animation loop during an AR session.
+renderer.setAnimationLoop(animate);
 
 // AR hit test variables
-
 let hitTestSource = null;
 let hitTestSourceRequested = false;
-let arRockPlaced = false;
+let arDisplayRock = null; // Simple object for AR display
 
 // Lighting
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
@@ -787,10 +792,17 @@ function updateSimYearsDisplay() {
 
 // Helper for placing the rock in AR
 function onSelect() {
-  if (arReticle.visible && !arRockPlaced) {
-    rock.position.setFromMatrixPosition(arReticle.matrix);
-    rock.visible = true;
-    arRockPlaced = true;
+  console.log('[AR Debug Simplified] onSelect triggered.');
+  if (arReticle.visible && arDisplayRock) {
+    console.log('[AR Debug Simplified] Reticle visible, AR display rock exists. Placing.');
+    arDisplayRock.position.setFromMatrixPosition(arReticle.matrix);
+    arDisplayRock.position.y += 0.01; // Slight elevation
+    arDisplayRock.visible = true;
+    arRockPlaced = true; // Use this to track if the AR object is placed
+    arReticle.visible = false;
+    console.log('[AR Debug Simplified] arDisplayRock placed. Position:', arDisplayRock.position.clone(), 'Visible:', arDisplayRock.visible);
+  } else {
+    console.log('[AR Debug Simplified] Reticle not visible or arDisplayRock not ready, cannot place.');
   }
 }
 
@@ -803,13 +815,63 @@ arReticle.visible = false;
 scene.add(arReticle);
 
 renderer.xr.addEventListener('sessionstart', () => {
+  console.log('[AR Debug Simplified] Session started.');
   arRockPlaced = false;
-  rock.visible = false;
+
+  // Hide non-AR elements
+  if(rock) rock.visible = false;
+  if(ground) ground.visible = false;
+  scene.background = null; // Use camera feed as background
+  console.log('[AR Debug Simplified] Hid original rock, ground. Set scene background to null.');
+
+  // Create or prepare arDisplayRock (simple green sphere)
+  if (!arDisplayRock) {
+    const arGeo = new THREE.SphereGeometry(0.1, 32, 32); // Approx 20cm diameter sphere
+    const arMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 }); // Solid green
+    arDisplayRock = new THREE.Mesh(arGeo, arMat);
+    console.log('[AR Debug Simplified] Created arDisplayRock.');
+  }
+  arDisplayRock.visible = false; // Initially hidden, placed onSelect
+  scene.add(arDisplayRock); // Add to scene if not already (or re-add)
+  console.log('[AR Debug Simplified] arDisplayRock prepared and added to scene (initially hidden).');
 });
 
 renderer.xr.addEventListener('sessionend', () => {
-  arRockPlaced = false;
-  rock.visible = true;
+  console.log('[AR Debug Nuke] Session ended. Attempting to restore non-AR scene via full reset.');
+  arRockPlaced = false; // Reset AR placement flag
+
+  // Clean up AR-specific display object if it exists and is in the scene
+  if (arDisplayRock) {
+    if (arDisplayRock.parent) {
+        arDisplayRock.parent.remove(arDisplayRock);
+    }
+    if (arDisplayRock.geometry) arDisplayRock.geometry.dispose();
+    if (arDisplayRock.material) arDisplayRock.material.dispose();
+    arDisplayRock = null;
+    console.log('[AR Debug Nuke] arDisplayRock removed and disposed.');
+  }
+  
+  // Call the grand scene reset function
+  reinitializeScene();
+
+  // After reinitializeScene, the main rock, ground, lights, etc., are new instances.
+  // The scene background and renderer clear color are set by setWeatherVisuals within reinitializeScene.
+
+  // Attempt to reset XR state on the renderer
+  console.log('[AR Debug Nuke] Attempting to reset renderer XR state post-scene-reset.');
+  renderer.xr.enabled = false; // Temporarily disable XR
+  renderer.xr.enabled = true;  // Re-enable XR (ARButton will manage sessions)
+
+  // Ensure the non-AR animation loop is running with the new scene objects
+  if (renderer.xr.isPresenting) {
+    console.warn('[AR Debug Nuke] XR is still presenting after sessionend and scene reset, this is unexpected.');
+  } else {
+    renderer.setAnimationLoop(animate); // Restart the main animation loop
+    console.log('[AR Debug Nuke] Main animation loop (animate) re-established for new scene.');
+  }
+
+  scene.updateMatrixWorld(true); // Force update of all objects' world matrices
+  console.log('[AR Debug Nuke] scene.updateMatrixWorld(true) called post-scene-reset.');
 });
 
 // Add AR select event
@@ -895,12 +957,17 @@ function renderAR(timestamp, frame) {
     if (hitTestSource && !arRockPlaced) {
       const hitTestResults = frame.getHitTestResults(hitTestSource);
       if (hitTestResults.length > 0) {
+        console.log('[AR Debug] Hit test successful. Results:', hitTestResults.length);
         const hit = hitTestResults[0];
         arReticle.visible = true;
         arReticle.matrix.fromArray(hit.getPose(renderer.xr.getReferenceSpace()).transform.matrix);
       } else {
+        // console.log('[AR Debug] No hit test results.'); // This can be very spammy
         arReticle.visible = false;
       }
+    } else if (hitTestSource && arRockPlaced) {
+      // console.log('[AR Debug] Hit test source available, but rock already placed.'); // Also spammy
+      arReticle.visible = false;
     } else {
       arReticle.visible = false;
     }
@@ -908,11 +975,16 @@ function renderAR(timestamp, frame) {
   renderer.render(scene, camera);
 }
 
+// ARButton is already created and added around line 60 (const arButton = ...).
+// Removing redundant creation here.
+// document.body.appendChild(ARButton.createButton(renderer, {
+//     requiredFeatures: ['hit-test']
+// }));
+
 animate();
 
 // Click event for bouncing
 renderer.domElement.addEventListener('pointerdown', (event) => {
-  // Raycast to check if the rock was clicked
   const mouse = new THREE.Vector2(
     (event.clientX / renderer.domElement.clientWidth) * 2 - 1,
     -(event.clientY / renderer.domElement.clientHeight) * 2 + 1
