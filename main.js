@@ -5,7 +5,7 @@ import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
 const scene = new THREE.Scene();
 let rainParticles = null; // For 3D rain effect
 let snowParticles = null; // For 3D snow effect
-let snowCap = null; // For the snow cap mesh on the rock
+
 let thunderTimeout = null; // Stores the timeout ID for thunder
 let fogEnabled = false; // Tracks if 3D scene fog is active
 
@@ -682,62 +682,12 @@ function addSnow() {
   scene.add(snowParticles);
 }
 
-function addSnowCap(rockMesh) {
-  console.log('[addSnowCap] Called with rockMesh:', rockMesh);
-  if (!rockMesh) {
-    console.error('[addSnowCap] rockMesh is null or undefined.');
-    return;
-  }
-  if (snowCap) { // Remove existing snow cap first
-    scene.remove(snowCap);
-    if (snowCap.geometry) snowCap.geometry.dispose();
-    if (snowCap.material) snowCap.material.dispose();
-    snowCap = null;
-  }
-
-  const rockBoundingBox = new THREE.Box3().setFromObject(rockMesh);
-  const rockTopY = rockBoundingBox.max.y;
-  const rockWidth = rockBoundingBox.max.x - rockBoundingBox.min.x;
-  const rockDepth = rockBoundingBox.max.z - rockBoundingBox.min.z;
-  console.log(`[addSnowCap] Rock BBox: min=${JSON.stringify(rockBoundingBox.min)}, max=${JSON.stringify(rockBoundingBox.max)}`);
-  console.log(`[addSnowCap] Rock Top Y: ${rockTopY}, Width: ${rockWidth}, Depth: ${rockDepth}`);
-
-  // Make snow cap slightly smaller than the rock's width/depth to look more natural
-  const capRadius = Math.min(rockWidth, rockDepth) * 0.4;
-  const capHeight = 0.1; // Thin layer of snow
-
-  const snowCapGeometry = new THREE.CylinderGeometry(capRadius, capRadius * 0.9, capHeight, 32);
-  const snowCapMaterial = new THREE.MeshStandardMaterial({ 
-    color: 0xffffff, 
-    roughness: 0.8,
-    metalness: 0.0
-  });
-  snowCap = new THREE.Mesh(snowCapGeometry, snowCapMaterial);
-
-  // Position the snow cap on top of the rock
-  // The cylinder's origin is at its center, so position its bottom at rockTopY
-  snowCap.position.set(rockMesh.position.x, rockTopY + capHeight / 2 - 0.02, rockMesh.position.z); // a tiny bit lower to sink in
-  snowCap.castShadow = true;
-  snowCap.receiveShadow = true; // Snow cap can receive shadows from other objects if any
-
-  console.log('[addSnowCap] SnowCap mesh created:', snowCap);
-  console.log('[addSnowCap] SnowCap position target:', snowCap.position);
-  scene.add(snowCap);
-  console.log('[Weather Effect] Snow cap added to scene.');
-}
-
 function removeSnow() {
   if (snowParticles) {
     scene.remove(snowParticles);
     snowParticles.geometry.dispose();
     snowParticles.material.dispose();
     snowParticles = null;
-  }
-  if (snowCap) {
-    scene.remove(snowCap);
-    if (snowCap.geometry) snowCap.geometry.dispose();
-    if (snowCap.material) snowCap.material.dispose();
-    snowCap = null;
   }
 }
 
@@ -1012,8 +962,6 @@ function setWeatherVisuals(weatherOrString) {
       directionalIntensity = 0.55;
       console.log('[Weather] Calling addSnow()');
       addSnow();
-      console.log('[Weather] Attempting to add snow cap. Rock object:', rock);
-      if (rock) addSnowCap(rock);
     } else if (main.includes('thunder')) {
       skyColor = '#282c34'; // Very dark, near-black desaturated blue/grey, ominous
       groundColor = '#4a4e58'; // Very dark grey, reflecting heavy shadow and wetness
